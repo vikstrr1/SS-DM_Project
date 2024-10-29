@@ -23,7 +23,7 @@ services:
       - kafka_network
 
   flink-jobmanager:
-    image: flink:1.15.2  # Specify a compatible Flink version
+    image: flink:1.14.2  # Specify a compatible Flink version
     environment:
       JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
     ports:
@@ -37,7 +37,7 @@ services:
       - ./flink-sql-connector-kafka_2.12-1.14.0.jar:/opt/flink/lib/flink-sql-connector-kafka_2.12-1.14.0.jar  # Mount the JAR file
 
   flink-taskmanager:
-    image: flink:1.15.2
+    image: flink:1.14.2
     environment:
       JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
     depends_on:
