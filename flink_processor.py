@@ -1,130 +1,156 @@
-from pyflink.datastream import StreamExecutionEnvironment
-from pyflink.datastream.connectors import FlinkKafkaConsumer
-from pyflink.common.serialization import SimpleStringSchema
-from pyflink.common import Types, RestartStrategies, Row
-import json
+import os
+from pyflink.common import Types, Row, Duration
+from pyflink.datastream.window import TumblingEventTimeWindows, TimeWindow
+from pyflink.datastream import ProcessWindowFunction, StreamExecutionEnvironment
+from pyflink.common.watermark_strategy import WatermarkStrategy, TimestampAssigner
+from pyflink.common.time import Time
+from pyflink.datastream.time_characteristic import TimeCharacteristic
 import logging
 from datetime import datetime
+from typing import Iterable, Optional, Dict, Tuple
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+#logging.basicConfig(level=logging.INFO)
 
-# Function to parse each JSON event to extract necessary fields
-def parse_event(event):
-    arrival_time = datetime.now().isoformat()  # Record the arrival time
+logging.disable(logging.CRITICAL + 1)
+
+def parse_event(line: str) -> Optional[Row]:
+    arrival_time = datetime.now().isoformat()
     try:
-        # Attempt to load the JSON data
-        data = json.loads(event)
-    except json.JSONDecodeError as e:
-        logging.error(f"JSON decode error: {e} for event: {event}")
-        return None  # Return None for malformed JSON
-
-    # Check if 'ID' is present and valid
-    if 'ID' not in data or '.' not in data['ID']:
-        logging.warning(f"Missing or invalid ID in event: {event}")
-        return None  # Return None if ID is missing or malformed
-
-    # Split the ID to extract symbol and exchange
-    symbol, exchange = data['ID'].split('.')
-
-    # Helper function to safely convert to float or return None
-    def safe_float(value):
-        if value in (None, ''):
+        if line.startswith("#") or not line.strip():
+            logging.debug(f"Ignoring comment or empty line: {line}")
             return None
+
+        fields = line.split(",")
+        if len(fields) < 39:
+            logging.warning(f"Incomplete line, skipping: {line}")
+            return None
+
+        symbol = fields[0].strip()
+        sec_type = fields[1].strip()
+        timestamp_str = f"{fields[2].strip()} {fields[3].strip()}"
+        last_price = fields[21].strip()
+        trading_time = fields[23].strip()
+        trading_date = fields[26].strip()
+
         try:
-            return float(value)
-        except ValueError as e:
-            logging.warning(f"Conversion error to float: {e} for value: {value}")
-            return None  # Return None for conversion issues
+            last_price = float(last_price) if last_price else None
+        except ValueError:
+            #logging.info(f"Invalid price format, skipping line: {line}")
+            return None
 
-    # Initialize parsed data with safe defaults
-    parsed_data = {
-        'symbol': symbol,
-        'exchange': exchange,
-        'sec_type': data.get('SecType', None),
-        'arrival_time': arrival_time,
-        'timestamp': None,
-        'last_price': safe_float(data.get('Last', None)),
-        'trading_time': data.get('Trading time', None),
-        'trading_date': data.get('Trading date', None)
-    }
+        if not all([symbol, sec_type, trading_time, trading_date]) or last_price is None:
+            #logging.warning(f"Missing mandatory fields in line: {line}")
+            return None
+    except Exception as e:
+        #logging.error(f"Error parsing line: {e} for line: {line}")
+        return None
 
-    # Convert Date and Time to timestamp if both are present
-    if 'Date' in data and 'Time' in data:
+    return Row(timestamp_str, symbol, sec_type, arrival_time, last_price, trading_time, trading_date)
+
+class SimpleTimestampAssigner(TimestampAssigner):
+    def extract_timestamp(self, value, record_timestamp) -> int:
+        if value is None:
+            #logging.warning("Received None as value, discarding event.")
+            return -1
+
+        iso_timestamp = value[0]
+        if not iso_timestamp:
+            #logging.warning(f"iso_timestamp is None or empty: {iso_timestamp}, discarding event.")
+            return -1
+
         try:
-            parsed_data['timestamp'] = datetime.strptime(
-                data['Date'] + ' ' + data['Time'], '%d-%m-%Y %H:%M:%S.%f'
-            ).isoformat()
+            dt = datetime.strptime(iso_timestamp, "%d-%m-%Y %H:%M:%S.%f")
+            #logging.debug(f"Parsed timestamp: {dt}")
+            return int(dt.timestamp() * 1000)
         except ValueError as e:
-            logging.warning(f"Date/time parsing error: {e} for event: {event}")
-            parsed_data['timestamp'] = None  # Handle parsing errors
+            #logging.error(f"Timestamp parsing failed for {iso_timestamp}: {e}")
+            return -1
 
-    # Return as a Row; return None if mandatory fields are missing
-    if any(value is None for value in [
-        parsed_data['symbol'],
-        parsed_data['exchange'],
-        parsed_data['sec_type'],
-        parsed_data['last_price'],
-        parsed_data['timestamp'],
-        parsed_data['arrival_time']
-    ]):
-        logging.warning(f"Missing mandatory fields in event: {event}")
-        return None  # Ensure all mandatory fields are present before returning
+class EMAProcessFunction(ProcessWindowFunction[Row, Tuple[str, int, int, float, float, str, Optional[int]], str, TimeWindow]):
+    def __init__(self):
+        self.previous_ema: Dict[str, Tuple[Optional[float], Optional[float]]] = {}
 
-    return Row(
-        parsed_data['symbol'],
-        parsed_data['exchange'],
-        parsed_data['sec_type'],
-        parsed_data['arrival_time'],
-        parsed_data['timestamp'],
-        parsed_data['last_price'],
-        parsed_data['trading_time'],
-        parsed_data['trading_date']
-    )
+    def process(self, key: str, context: ProcessWindowFunction.Context[TimeWindow], elements: Iterable[Row]) -> Iterable[Tuple[str, int, int, Optional[float], Optional[float], str, Optional[int]]]:
+        prices = [element[4] for element in elements if element[4] is not None]
+        if not prices:
+            #logging.warning(f"No valid prices for symbol {key} in this window, skipping EMA calculation.")
+            return []
 
-# Main function to set up the Flink job
+        # Calculate EMA and handle None values
+        alpha_38 = 2 / (38 + 1)
+        alpha_100 = 2 / (100 + 1)
+        previous_ema_38, previous_ema_100 = self.previous_ema.get(key, (None, None))
+
+        ema_38 = self.calculate_ema(prices[-1], previous_ema_38, alpha_38)
+        ema_100 = self.calculate_ema(prices[-1], previous_ema_100, alpha_100)
+
+        # Handle breakout and None values
+        breakout_type, breakout_timestamp = self.check_breakout(previous_ema_38, previous_ema_100, ema_38, ema_100, context)
+        self.previous_ema[key] = (ema_38, ema_100)
+
+        start_time = datetime.fromtimestamp(context.window().start / 1000).strftime('%Y-%m-%d %H:%M:%S')
+        end_time = datetime.fromtimestamp(context.window().end / 1000).strftime('%Y-%m-%d %H:%M:%S')
+
+        # Provide a default if any field might be None
+        return [(key, start_time, end_time, ema_38 or 0.0, ema_100 or 0.0, breakout_type or "", breakout_timestamp or -1)]
+
+    def calculate_ema(self, current_price: float, previous_ema: Optional[float], alpha: float) -> float:
+        if previous_ema is None:
+            #logging.debug(f"No previous EMA, using current price for EMA calculation: {current_price}")
+            return current_price
+        return (alpha * current_price) + ((1 - alpha) * previous_ema)
+
+    def check_breakout(self, previous_ema_38: Optional[float], previous_ema_100: Optional[float], ema_38: float, ema_100: float, context: ProcessWindowFunction.Context[TimeWindow]) -> Tuple[str, Optional[int]]:
+        breakout_type = None
+        breakout_timestamp = None
+        if previous_ema_38 is not None and previous_ema_100 is not None:
+            if ema_38 > ema_100 and previous_ema_38 <= previous_ema_100:
+                breakout_type = "Bullish Breakout"
+                breakout_timestamp = context.current_processing_time()
+            elif ema_100 > ema_38 and previous_ema_100 <= previous_ema_38:
+                breakout_type = "Bearish Breakout"
+                breakout_timestamp = context.current_processing_time()
+        return breakout_type, breakout_timestamp
+
 def main():
     env = StreamExecutionEnvironment.get_execution_environment()
-    env.set_restart_strategy(RestartStrategies.fixed_delay_restart(3, 10))
-    env.add_jars("file:///opt/flink/lib/flink-sql-connector-kafka_2.12-1.14.0.jar")
+    env.set_stream_time_characteristic(TimeCharacteristic.EventTime)
 
-    kafka_props = {
-        'bootstrap.servers': 'kafka:9092',
-        'group.id': 'financial_data_group'
-    }
+    data_dir = "/opt/flink/jobs/data/trading_data/debs2022-gc-trading-day-08-11-21.csv"
+    
+    parsed_stream = env.read_text_file(data_dir) \
+        .map(parse_event, output_type=Types.ROW([
+            Types.STRING(),  # timestamp_str
+            Types.STRING(),  # symbol
+            Types.STRING(),  # sec_type
+            Types.STRING(),  # arrival_time
+            Types.FLOAT(),   # last_price
+            Types.STRING(),  # trading_time
+            Types.STRING()   # trading_date
+        ])).filter(lambda x: x is not None)
+     
+    watermark_strategy = WatermarkStrategy \
+        .for_bounded_out_of_orderness(Duration.of_minutes(1)) \
+        .with_timestamp_assigner(SimpleTimestampAssigner())
 
-    kafka_consumer = FlinkKafkaConsumer(
-        topics='financial_data',
-        deserialization_schema=SimpleStringSchema(),
-        properties=kafka_props
-    )
-
-    stream = env.add_source(kafka_consumer)
-
-    # Map function to parse each event with relevant fields
-    parsed_stream = stream.map(
-        parse_event,
-        output_type=Types.ROW(
-            [
-                Types.STRING(),  # symbol
-                Types.STRING(),  # exchange
-                Types.STRING(),  # sec_type
-                Types.STRING(),  # arrival_time
-                Types.STRING(),  # timestamp
-                Types.FLOAT(),   # last_price
-                Types.STRING(),  # trading_time
-                Types.STRING()   # trading_date
-            ]
-        )
-    )
-
-    # Filter out empty parsed data (ensure no None values)
-    parsed_stream = parsed_stream.filter(lambda x: x is not None)
-
-    # Print parsed data directly for monitoring
-    parsed_stream.print().name("Print Parsed Events")
-
-    env.execute("Flink Streaming of Financial Data")
+    windowed_stream = parsed_stream \
+        .assign_timestamps_and_watermarks(watermark_strategy) \
+        .key_by(lambda x: x[1]) \
+        .window(TumblingEventTimeWindows.of(Time.minutes(5))) \
+        .process(EMAProcessFunction(), Types.TUPLE([
+            Types.STRING(),  # Symbol
+            Types.STRING(),    # Window start
+            Types.STRING(),    # Window end
+            Types.FLOAT(),   # EMA_38 (or defaulted)
+            Types.FLOAT(),   # EMA_100 (or defaulted)
+            Types.STRING(),  # Breakout type (or "")
+            Types.LONG()     # Breakout timestamp (or -1)
+        ])).set_parallelism(4)
+     
+    env.set_parallelism(1)
+    windowed_stream.print().name("print windows stream")
+    env.execute("Flink EMA Calculation and Breakout Detection")
 
 if __name__ == '__main__':
     main()

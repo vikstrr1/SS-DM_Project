@@ -1,45 +1,29 @@
 version: '3.8'
 
 services:
-  zookeeper:
-    image: wurstmeister/zookeeper
-    ports:
-      - "2181:2181"
-    networks:
-      - kafka_network
-
-  kafka:
-    image: wurstmeister/kafka
-    environment:
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
-    ports:
-      - "9092:9092"
-    depends_on:
-      - zookeeper
-    networks:
-      - kafka_network
-
   flink-jobmanager:
-    image: flink:1.14.2  # Specify a compatible Flink version
+    build:  # Use Dockerfile in the current directory
+      context: .
+      dockerfile: Dockerfile
     environment:
       JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
     ports:
       - "8081:8081"
     command: jobmanager
-    depends_on:
-      - kafka
     networks:
       - kafka_network
     volumes:
       - ./flink-sql-connector-kafka_2.12-1.14.0.jar:/opt/flink/lib/flink-sql-connector-kafka_2.12-1.14.0.jar  # Mount the JAR file
+      - ./data/trading_data:/opt/flink/jobs/data/trading_data 
 
   flink-taskmanager:
-    image: flink:1.14.2
+    build:  # Use Dockerfile in the current directory
+      context: .
+      dockerfile: Dockerfile
     environment:
       JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
+      TASK_MANAGER_NUMBER_OF_TASK_SLOTS: 4  # Set the number of task slots
+      FLINK_PROPERTIES: "taskmanager.numberOfTaskSlots=4"
     depends_on:
       - flink-jobmanager
     command: taskmanager
@@ -47,29 +31,8 @@ services:
       - kafka_network
     volumes:
       - ./flink-sql-connector-kafka_2.12-1.14.0.jar:/opt/flink/lib/flink-sql-connector-kafka_2.12-1.14.0.jar  # Mount the JAR file
-
-  stream-emulator:
-    build: .
-    volumes:
-      - ./data:/opt/flink/jobs/data
-      - ./:/usr/src/app  # Mount the entire project directory
-    command: ["./wait-for-it.sh", "kafka:9092", "--", "./retry_stream_emulator.sh"]
-    depends_on:
-      - kafka
-    networks:
-      - kafka_network
-
-  flink-processor:
-    build: .
-    volumes:
-      - ./:/usr/src/app  # Mount the entire project directory
-      - ./flink-sql-connector-kafka_2.12-1.14.0.jar:/opt/flink/lib/flink-sql-connector-kafka_2.12-1.14.0.jar
-    command: ["./wait-for-it.sh", "kafka:9092", "--", "python", "flink_processor.py"]
-    depends_on:
-      - flink-jobmanager
-      - kafka
-    networks:
-      - kafka_network
+      - ./data/trading_data:/opt/flink/jobs/data/trading_data 
 
 networks:
   kafka_network:
+    driver: bridge
