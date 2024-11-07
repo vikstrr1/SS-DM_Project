@@ -14,6 +14,7 @@ logging.basicConfig(level=logging.DEBUG)
 
 # Function to parse each CSV row to extract necessary fields
 def parse_event(line: str):
+    logging.debug(f"Parsed event: {line}")
     arrival_time = datetime.now().isoformat()  # Record the arrival time
     try:
         if line.startswith("#") or not line.strip():
@@ -29,7 +30,7 @@ def parse_event(line: str):
         last_price = float(last_price) if last_price else None
 
         if any(value is None for value in [symbol, exchange, sec_type, last_price, trading_time, trading_date]):
-            #logging.warning(f"Missing mandatory fields in line: {line}")
+            logging.warning(f"Missing mandatory fields in line: {line}")
             return None
     except (ValueError, IndexError) as e:
         logging.error(f"Error unpacking line: {e} for line: {line}")
@@ -94,8 +95,8 @@ def main():
     env.set_stream_time_characteristic(TimeCharacteristic.EventTime)
     # Reading and parsing multiple CSV files
     #Change path to correct
+    #data_dir = "/home/emil/Desktop/Aalto-DistributedSystems/project/SS-DM_Project/data/trading_data/"
     data_dir = "/Users/rasmusvikstrom/SS-DM_Project/data/trading_data/"
-    #data_dir = "/Users/rasmusvikstrom/SS-DM_Project/data/trading_data/"
     
     # Create a list to hold all parsed events
     parsed_events = []
@@ -138,7 +139,7 @@ def main():
 
     # Printing the results
     windowed_stream.print().name("Print Windowed Events")
-    
+
     # Execute the Flink job
     env.execute("Flink EMA Calculation and Breakout Detection")
 

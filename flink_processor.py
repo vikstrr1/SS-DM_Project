@@ -10,20 +10,19 @@ from datetime import datetime
 from typing import Iterable, Optional, Dict, Tuple
 
 # Configure logging
-#logging.basicConfig(level=logging.INFO)
-
-logging.disable(logging.CRITICAL + 1)
+logging.basicConfig(level=logging.INFO)
 
 def parse_event(line: str) -> Optional[Row]:
+    #logging.warning("Into parse_event")
     arrival_time = datetime.now().isoformat()
     try:
         if line.startswith("#") or not line.strip():
-            logging.debug(f"Ignoring comment or empty line: {line}")
+            #logging.debug(f"Ignoring comment or empty line: {line}")
             return None
 
         fields = line.split(",")
         if len(fields) < 39:
-            logging.warning(f"Incomplete line, skipping: {line}")
+            #logging.warning(f"Incomplete line, skipping: {line}")
             return None
 
         symbol = fields[0].strip()
@@ -51,20 +50,20 @@ def parse_event(line: str) -> Optional[Row]:
 class SimpleTimestampAssigner(TimestampAssigner):
     def extract_timestamp(self, value, record_timestamp) -> int:
         if value is None:
-            #logging.warning("Received None as value, discarding event.")
+            logging.warning("Received None as value, discarding event.")
             return -1
 
         iso_timestamp = value[0]
         if not iso_timestamp:
-            #logging.warning(f"iso_timestamp is None or empty: {iso_timestamp}, discarding event.")
+            logging.warning(f"iso_timestamp is None or empty: {iso_timestamp}, discarding event.")
             return -1
 
         try:
             dt = datetime.strptime(iso_timestamp, "%d-%m-%Y %H:%M:%S.%f")
-            #logging.debug(f"Parsed timestamp: {dt}")
+            logging.debug(f"Parsed timestamp: {dt}")
             return int(dt.timestamp() * 1000)
         except ValueError as e:
-            #logging.error(f"Timestamp parsing failed for {iso_timestamp}: {e}")
+            logging.error(f"Timestamp parsing failed for {iso_timestamp}: {e}")
             return -1
 
 class EMAProcessFunction(ProcessWindowFunction[Row, Tuple[str, int, int, float, float, str, Optional[int]], str, TimeWindow]):
@@ -74,51 +73,56 @@ class EMAProcessFunction(ProcessWindowFunction[Row, Tuple[str, int, int, float, 
     def process(self, key: str, context: ProcessWindowFunction.Context[TimeWindow], elements: Iterable[Row]) -> Iterable[Tuple[str, int, int, Optional[float], Optional[float], str, Optional[int]]]:
         prices = [element[4] for element in elements if element[4] is not None]
         if not prices:
-            #logging.warning(f"No valid prices for symbol {key} in this window, skipping EMA calculation.")
+            logging.warning(f"No valid prices for symbol {key} in this window, skipping EMA calculation.")
             return []
 
         # Calculate EMA and handle None values
         alpha_38 = 2 / (38 + 1)
         alpha_100 = 2 / (100 + 1)
+
         previous_ema_38, previous_ema_100 = self.previous_ema.get(key, (None, None))
 
         ema_38 = self.calculate_ema(prices[-1], previous_ema_38, alpha_38)
         ema_100 = self.calculate_ema(prices[-1], previous_ema_100, alpha_100)
-
-        # Handle breakout and None values
-        breakout_type, breakout_timestamp = self.check_breakout(previous_ema_38, previous_ema_100, ema_38, ema_100, context)
+        
+        # Check for breakout patterns and assign advice
+        advice_type, advice_timestamp = self.check_advice(previous_ema_38, previous_ema_100, ema_38, ema_100, context)
         self.previous_ema[key] = (ema_38, ema_100)
 
         start_time = datetime.fromtimestamp(context.window().start / 1000).strftime('%Y-%m-%d %H:%M:%S')
         end_time = datetime.fromtimestamp(context.window().end / 1000).strftime('%Y-%m-%d %H:%M:%S')
 
         # Provide a default if any field might be None
-        return [(key, start_time, end_time, ema_38 or 0.0, ema_100 or 0.0, breakout_type or "", breakout_timestamp or -1)]
+        return [(key, start_time, end_time, ema_38 or 0.0, ema_100 or 0.0, advice_type or "", advice_timestamp or -1)]
 
     def calculate_ema(self, current_price: float, previous_ema: Optional[float], alpha: float) -> float:
         if previous_ema is None:
-            #logging.debug(f"No previous EMA, using current price for EMA calculation: {current_price}")
+            logging.debug(f"No previous EMA, using current price for EMA calculation: {current_price}")
             return current_price
         return (alpha * current_price) + ((1 - alpha) * previous_ema)
 
-    def check_breakout(self, previous_ema_38: Optional[float], previous_ema_100: Optional[float], ema_38: float, ema_100: float, context: ProcessWindowFunction.Context[TimeWindow]) -> Tuple[str, Optional[int]]:
-        breakout_type = None
-        breakout_timestamp = None
+    def check_advice(self, previous_ema_38: Optional[float], previous_ema_100: Optional[float], ema_38: float, ema_100: float, context: ProcessWindowFunction.Context[TimeWindow]) -> Tuple[str, Optional[int]]:
+        advice_type = None
+        advice_timestamp = None
         if previous_ema_38 is not None and previous_ema_100 is not None:
+            # Bullish breakout: EMA38 crosses above EMA100
             if ema_38 > ema_100 and previous_ema_38 <= previous_ema_100:
-                breakout_type = "Bullish Breakout"
-                breakout_timestamp = context.current_processing_time()
+                advice_type = "Buy"
+                advice_timestamp = context.current_processing_time()
+                logging.info(f"Bullish breakout detected for {context.window().start} - Buy advice generated.")
+            # Bearish breakout: EMA38 crosses below EMA100
             elif ema_100 > ema_38 and previous_ema_100 <= previous_ema_38:
-                breakout_type = "Bearish Breakout"
-                breakout_timestamp = context.current_processing_time()
-        return breakout_type, breakout_timestamp
+                advice_type = "Sell"
+                advice_timestamp = context.current_processing_time()
+                logging.info(f"Bearish breakout detected for {context.window().start} - Sell advice generated.")
+        return advice_type, advice_timestamp
 
 def main():
+    logging.warning("At least main is running successfully")
     env = StreamExecutionEnvironment.get_execution_environment()
     env.set_stream_time_characteristic(TimeCharacteristic.EventTime)
 
     data_dir = "/opt/flink/jobs/data/trading_data/debs2022-gc-trading-day-08-11-21.csv"
-    
     parsed_stream = env.read_text_file(data_dir) \
         .map(parse_event, output_type=Types.ROW([
             Types.STRING(),  # timestamp_str
@@ -129,7 +133,6 @@ def main():
             Types.STRING(),  # trading_time
             Types.STRING()   # trading_date
         ])).filter(lambda x: x is not None)
-     
     watermark_strategy = WatermarkStrategy \
         .for_bounded_out_of_orderness(Duration.of_minutes(1)) \
         .with_timestamp_assigner(SimpleTimestampAssigner())
@@ -149,7 +152,8 @@ def main():
         ])).set_parallelism(4)
      
     env.set_parallelism(1)
-    windowed_stream.print().name("print windows stream")
+    # windowed_stream.print().name("print windows stream")
+
     env.execute("Flink EMA Calculation and Breakout Detection")
 
 if __name__ == '__main__':
