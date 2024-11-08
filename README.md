@@ -19,4 +19,13 @@ kubectl apply -f kubernetes/flink-jobmanager-service.yaml
 kubectl apply -f kubernetes/flink-taskmanager.yaml           
 kubectl apply -f kubernetes/flink-taskmanager-service.yaml
 
+kubectl port-forward deployment/flink-jobmanager 8081:8081
+
 ´´´
+New terminal window
+
+´´´
+kubectl exec -it flink-jobmanager-5d4c5bdb9b-8qds4 -- bash -c "cd /opt/flink && ./bin/flink run -m flink-jobmanager:8081 -py /opt/flink/jobs/flink_processor.py"
+
+´´´
+
