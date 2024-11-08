@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-taskmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flink-taskmanager
+  template:
+    metadata:
+      labels:
+        app: flink-taskmanager
+    spec:
+      containers:
+      - name: flink-taskmanager
+        image: apache-flink-project:v1
+        command: ["/opt/flink/bin/taskmanager.sh", "start-foreground"]
+        env:
+        - name: JOB_MANAGER_RPC_ADDRESS
+          value: flink-jobmanager
+        - name: TASK_MANAGER_NUMBER_OF_TASK_SLOTS
+          value: "4"
+        ports:
+        - containerPort: 6121
+        volumeMounts:
+        - mountPath: /opt/flink/jobs/data/trading_data
+          name: trading-data
+      volumes:
+      - name: trading-data
+        hostPath:
+          path: /Users/rasmusvikstrom/SS-DM_Project/data/trading_data/

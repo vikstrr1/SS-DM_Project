@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flink-jobmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flink-jobmanager
+  template:
+    metadata:
+      labels:
+        app: flink-jobmanager
+    spec:
+      containers:
+      - name: flink-jobmanager
+        image: apache-flink-project:v1
+        command: ["/opt/flink/bin/jobmanager.sh", "start-foreground"]
+        ports:
+        - containerPort: 8081
+        env:
+        - name: JOB_MANAGER_RPC_ADDRESS
+          value: flink-jobmanager
+        volumeMounts:
+        - mountPath: /opt/flink/jobs/data/trading_data
+          name: trading-data
+      volumes:
+      - name: trading-data
+        hostPath:
+          path: /Users/rasmusvikstrom/SS-DM_Project/data/trading_data/
