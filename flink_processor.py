@@ -9,6 +9,7 @@ import logging
 from datetime import datetime
 from typing import Iterable, Optional, Dict, Tuple
 
+# from pyflink.datastream.connectors.elasticsearch import ElasticsearchEmitter, ElasticsearchSinkBuilder
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
@@ -150,10 +151,33 @@ def main():
             Types.STRING(),  # Breakout type (or "")
             Types.LONG()     # Breakout timestamp (or -1)
         ])).set_parallelism(4)
-     
-    env.set_parallelism(1)
-    # windowed_stream.print().name("print windows stream")
+    
 
+    
+    env.set_parallelism(1)
+    windowed_stream.print().name("print windows stream")
+
+    # Testdata to check that index is working
+
+    '''
+    temp_data = [
+    ("2024-11-10T10:00:00", "AAPL", "Stock"),
+    ("2024-11-10T10:01:00", "GOOG", "Stock"),
+    ("2024-11-10T10:02:00", "MSFT", "Stock")
+    ]
+
+    es6_sink = ElasticsearchSinkBuilder() \
+    .set_bulk_flush_max_actions(1) \
+    .set_emitter(ElasticsearchEmitter.static_index('date', 'name', 'type')) \
+    .set_hosts(['localhost:9200']) \
+    .build()
+
+    
+    temp_data.sink_to(es6_sink).name('es7 sink')
+
+    # Optionally print the stream (for debugging)
+    temp_data.print().name("print windows stream")
+    '''
     env.execute("Flink EMA Calculation and Breakout Detection")
 
 if __name__ == '__main__':
