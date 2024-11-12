@@ -1,5 +1,6 @@
 # Used to Manually add a index that tests elasticsearch db 
 
+## Create index 
 curl -v -X PUT "https://172.18.0.1:9200/stock_data" \
     -u elastic:password123 \
     -H "Content-Type: application/json" \
@@ -16,3 +17,30 @@ curl -v -X PUT "https://172.18.0.1:9200/stock_data" \
             }
         }
     }' --insecure
+
+## Create EMA-data index
+curl -v -X PUT "https://172.18.0.1:9200/ema_data" \
+    -u elastic:password123 \
+    -H "Content-Type: application/json" \
+    -d '{
+        "settings": {
+            "number_of_shards": 1,
+            "number_of_replicas": 0
+        },
+        "mappings": {
+            "properties": {
+                "timestamp": {"type": "text"},
+                "symbol": {"type": "keyword"},
+                "type": {"type": "keyword"},
+                "ema_38": {"type": "float"},
+                "ema_100": {"type": "float"},
+                "advice": {"type": "keyword"},
+                "advice_timestamp": {"type": "long"}
+            }
+        }
+    }' --insecure
+
+## View list of indexes locally 
+curl -X GET "https://localhost:9200/_cat/indices?v" -u elastic:password123 --insecure
+## PATH to view indices when inside jobmanager container
+curl -X GET "https://172.18.0.1:9200/_cat/indices?v" -u elastic:password123 --insecure

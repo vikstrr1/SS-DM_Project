@@ -8,14 +8,13 @@ from pyflink.datastream.time_characteristic import TimeCharacteristic
 import logging
 from datetime import datetime
 from typing import Iterable, Optional, Dict, Tuple
-from pyflink.datastream import RuntimeExecutionMode
-
 
 
 from pyflink.common import Types
-from pyflink.datastream.functions import MapFunction
+
 import requests
 import json
+from pyflink.datastream import ProcessFunction
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -126,7 +125,7 @@ class EMAProcessFunction(ProcessWindowFunction[Row, Tuple[str, int, int, float, 
         return advice_type, advice_timestamp
 
 
-def insert_data(index_name, data):
+def insert_static_data(index_name, data):
     # Elasticsearch URL (adjust the host/port as needed)
     es_url = f"https://172.18.0.1:9200/{index_name}/_bulk"
 
@@ -160,7 +159,77 @@ def insert_data(index_name, data):
     except requests.exceptions.RequestException as e:
         print(f"Error during request: {e}")
 
+class ElasticsearchHttpProcessFunction(ProcessFunction):
+    def __init__(self, index_name):
+        self.index_name = index_name
+        self.es_url = f"https://172.18.0.1:9200/{index_name}/_bulk"
+        self.headers = {"Content-Type": "application/x-ndjson"}
+        self.auth = ("elastic", "password123")  # Adjust with your authentication
 
+    def process_element(self, value, ctx: 'ProcessFunction.Context'):
+        # Prepare the document for Elasticsearch
+        document = {
+            "timestamp": value[0],
+            "symbol": value[1],
+            "type": value[2],
+            "ema_38": value[3],
+            "ema_100": value[4],
+            "advice": value[5],
+            "advice_timestamp": value[6]
+        }
+
+        # Prepare the bulk request data
+        action = json.dumps({
+            "index": {
+                "_index": self.index_name
+            }
+        })
+        bulk_data = f"{action}\n{json.dumps(document)}\n"
+
+        # Send the bulk data to Elasticsearch via the POST request
+        try:
+            response = requests.post(self.es_url, data=bulk_data, headers=self.headers, auth=self.auth, verify=False)
+            if response.status_code == 200:
+                logging.info(f"Successfully inserted document: {document}")
+            else:
+                logging.error(f"Failed to insert document. Status code: {response.status_code}, Response: {response.text}")
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Error during request: {e}")
+
+
+def send_to_elasticsearch(value):
+    es_url = "https://172.18.0.1:9200/ema_data/_bulk"
+    headers = {"Content-Type": "application/x-ndjson"}
+    auth = ("elastic", "password123")  # Adjust with your authentication
+
+    # Prepare the document for Elasticsearch
+    document = {
+        "timestamp": value[0],
+        "symbol": value[1],
+        "type": value[2],
+        "ema_38": value[3],
+        "ema_100": value[4],
+        "advice": value[5],
+        "advice_timestamp": value[6]
+    }
+
+    # Prepare the bulk request data
+    action = json.dumps({
+        "index": {
+            "_index": "ema_data"
+        }
+    })
+    bulk_data = f"{action}\n{json.dumps(document)}\n"
+
+    # Send the bulk data to Elasticsearch via the POST request
+    try:
+        response = requests.post(es_url, data=bulk_data, headers=headers, auth=auth, verify=False)
+        if response.status_code == 200:
+            logging.info(f"Successfully inserted document: {document}")
+        else:
+            logging.error(f"Failed to insert document. Status code: {response.status_code}, Response: {response.text}")
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error during request: {e}")
 
 def main():
     logging.warning("At least main is running successfully")
@@ -200,22 +269,13 @@ def main():
     
     env.set_parallelism(1)
     windowed_stream.print().name("print windows stream")
-    '''
-
-    env = StreamExecutionEnvironment.get_execution_environment()
-    env.set_runtime_mode(RuntimeExecutionMode.STREAMING)  # Set execution mode
-
-    temp_data = [
-        ("2024-11-10T10:00:00", "AAPL", "Stock"),
-        ("2024-11-10T10:01:00", "GOOG", "Stock"),
-        ("2024-11-10T10:02:00", "MSFT", "Stock")
-    ]
-
-    insert_data("stock_data", temp_data)
     
+    ##windowed_stream.add_sink(ElasticsearchPostSink("ema_data")).set_parallelism(1)
+    ##windowed_stream.add_sink(ElasticsearchHttpProcessFunction("ema_data")).set_parallelism(1)
+    windowed_stream.map(send_to_elasticsearch).set_parallelism(1)
 
     logging.warning("Completed mapped streaming")
-    '''
+    
     # Execute the Flink job
     env.execute("Flink EMA Calculation and Breakout Detection")
 
