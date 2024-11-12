@@ -8,8 +8,15 @@ from pyflink.datastream.time_characteristic import TimeCharacteristic
 import logging
 from datetime import datetime
 from typing import Iterable, Optional, Dict, Tuple
+from pyflink.datastream import RuntimeExecutionMode
 
-# from pyflink.datastream.connectors.elasticsearch import ElasticsearchEmitter, ElasticsearchSinkBuilder
+
+
+from pyflink.common import Types
+from pyflink.datastream.functions import MapFunction
+import requests
+import json
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
@@ -118,11 +125,48 @@ class EMAProcessFunction(ProcessWindowFunction[Row, Tuple[str, int, int, float, 
                 logging.info(f"Bearish breakout detected for {context.window().start} - Sell advice generated.")
         return advice_type, advice_timestamp
 
+
+def insert_data(index_name, data):
+    # Elasticsearch URL (adjust the host/port as needed)
+    es_url = f"https://172.18.0.1:9200/{index_name}/_bulk"
+
+    # Prepare the bulk request data
+    bulk_data = ""
+    for entry in data:
+        document = {
+            "timestamp": entry[0],
+            "symbol": entry[1],
+            "type": entry[2]
+        }
+
+        # Prepare the action and the document in the bulk request format
+        action = json.dumps({
+            "index": {
+                "_index": index_name
+            }
+        })
+        bulk_data += action + "\n" + json.dumps(document) + "\n"
+
+    # Make a POST request to insert documents in bulk
+    headers = {"Content-Type": "application/x-ndjson"}
+    try:
+        response = requests.post(es_url, data=bulk_data, auth=("elastic", "password123"), headers=headers, verify=False)
+        
+        if response.status_code == 200:
+            print(f"Successfully inserted {len(data)} documents.")
+        else:
+            print(f"Failed to insert documents. Status code: {response.status_code}, Response: {response.text}")
+    
+    except requests.exceptions.RequestException as e:
+        print(f"Error during request: {e}")
+
+
+
 def main():
     logging.warning("At least main is running successfully")
     env = StreamExecutionEnvironment.get_execution_environment()
     env.set_stream_time_characteristic(TimeCharacteristic.EventTime)
-
+    
     data_dir = "/opt/flink/jobs/data/trading_data/debs2022-gc-trading-day-08-11-21.csv"
     parsed_stream = env.read_text_file(data_dir) \
         .map(parse_event, output_type=Types.ROW([
@@ -156,28 +200,23 @@ def main():
     
     env.set_parallelism(1)
     windowed_stream.print().name("print windows stream")
-
-    # Testdata to check that index is working
-
     '''
+
+    env = StreamExecutionEnvironment.get_execution_environment()
+    env.set_runtime_mode(RuntimeExecutionMode.STREAMING)  # Set execution mode
+
     temp_data = [
-    ("2024-11-10T10:00:00", "AAPL", "Stock"),
-    ("2024-11-10T10:01:00", "GOOG", "Stock"),
-    ("2024-11-10T10:02:00", "MSFT", "Stock")
+        ("2024-11-10T10:00:00", "AAPL", "Stock"),
+        ("2024-11-10T10:01:00", "GOOG", "Stock"),
+        ("2024-11-10T10:02:00", "MSFT", "Stock")
     ]
 
-    es6_sink = ElasticsearchSinkBuilder() \
-    .set_bulk_flush_max_actions(1) \
-    .set_emitter(ElasticsearchEmitter.static_index('date', 'name', 'type')) \
-    .set_hosts(['localhost:9200']) \
-    .build()
-
+    insert_data("stock_data", temp_data)
     
-    temp_data.sink_to(es6_sink).name('es7 sink')
 
-    # Optionally print the stream (for debugging)
-    temp_data.print().name("print windows stream")
+    logging.warning("Completed mapped streaming")
     '''
+    # Execute the Flink job
     env.execute("Flink EMA Calculation and Breakout Detection")
 
 if __name__ == '__main__':

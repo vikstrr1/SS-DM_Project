@@ -15,7 +15,7 @@ services:
     volumes:
       - ./flink-sql-connector-kafka_2.12-1.14.0.jar:/opt/flink/lib/flink-sql-connector-kafka_2.12-1.14.0.jar  # Mount the JAR file
       - ./data/trading_data:/opt/flink/jobs/data/trading_data 
-      - ./flink-connector-elasticsearch7.jar:/opt/flink/lib/flink-connector-elasticsearch7.jar
+      - ./flink-sql-connector-elasticsearch7-3.0.1-1.17.jar:/opt/flink/lib/flink-connector-elasticsearch.jar
 
   flink-taskmanager:
     build:  # Use Dockerfile in the current directory
@@ -34,7 +34,7 @@ services:
     volumes:
       - ./flink-sql-connector-kafka_2.12-1.14.0.jar:/opt/flink/lib/flink-sql-connector-kafka_2.12-1.14.0.jar  # Mount the JAR file
       - ./data/trading_data:/opt/flink/jobs/data/trading_data
-      - ./flink-connector-elasticsearch7.jar:/opt/flink/lib/flink-connector-elasticsearch7.jar
+      - ./flink-sql-connector-elasticsearch7-3.0.1-1.17.jar:/opt/flink/lib/flink-connector-elasticsearch.jar
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.1.0

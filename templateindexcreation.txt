@@ -1,0 +1,18 @@
+# Used to Manually add a index that tests elasticsearch db 
+
+curl -v -X PUT "https://172.18.0.1:9200/stock_data" \
+    -u elastic:password123 \
+    -H "Content-Type: application/json" \
+    -d '{
+        "settings": {
+            "number_of_shards": 1,
+            "number_of_replicas": 0
+        },
+        "mappings": {
+            "properties": {
+                "timestamp": {"type": "text"},
+                "symbol": {"type": "keyword"},
+                "type": {"type": "keyword"}
+            }
+        }
+    }' --insecure
