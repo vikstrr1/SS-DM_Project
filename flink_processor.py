@@ -159,45 +159,7 @@ def insert_static_data(index_name, data):
     except requests.exceptions.RequestException as e:
         print(f"Error during request: {e}")
 
-class ElasticsearchHttpProcessFunction(ProcessFunction):
-    def __init__(self, index_name):
-        self.index_name = index_name
-        self.es_url = f"https://172.18.0.1:9200/{index_name}/_bulk"
-        self.headers = {"Content-Type": "application/x-ndjson"}
-        self.auth = ("elastic", "password123")  # Adjust with your authentication
-
-    def process_element(self, value, ctx: 'ProcessFunction.Context'):
-        # Prepare the document for Elasticsearch
-        document = {
-            "timestamp": value[0],
-            "symbol": value[1],
-            "type": value[2],
-            "ema_38": value[3],
-            "ema_100": value[4],
-            "advice": value[5],
-            "advice_timestamp": value[6]
-        }
-
-        # Prepare the bulk request data
-        action = json.dumps({
-            "index": {
-                "_index": self.index_name
-            }
-        })
-        bulk_data = f"{action}\n{json.dumps(document)}\n"
-
-        # Send the bulk data to Elasticsearch via the POST request
-        try:
-            response = requests.post(self.es_url, data=bulk_data, headers=self.headers, auth=self.auth, verify=False)
-            if response.status_code == 200:
-                logging.info(f"Successfully inserted document: {document}")
-            else:
-                logging.error(f"Failed to insert document. Status code: {response.status_code}, Response: {response.text}")
-        except requests.exceptions.RequestException as e:
-            logging.error(f"Error during request: {e}")
-
-
-def send_to_elasticsearch(value):
+def send_ema_to_elasticsearch(value):
     es_url = "https://172.18.0.1:9200/ema_data/_bulk"
     headers = {"Content-Type": "application/x-ndjson"}
     auth = ("elastic", "password123")  # Adjust with your authentication
@@ -217,6 +179,36 @@ def send_to_elasticsearch(value):
     action = json.dumps({
         "index": {
             "_index": "ema_data"
+        }
+    })
+    bulk_data = f"{action}\n{json.dumps(document)}\n"
+
+    # Send the bulk data to Elasticsearch via the POST request
+    try:
+        response = requests.post(es_url, data=bulk_data, headers=headers, auth=auth, verify=False)
+        if response.status_code == 200:
+            logging.info(f"Successfully inserted document: {document}")
+        else:
+            logging.error(f"Failed to insert document. Status code: {response.status_code}, Response: {response.text}")
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error during request: {e}")
+
+
+def send_ticker_to_elasticsearch(value, tickername):
+    es_url = "https://172.18.0.1:9200/"+tickername+"/_bulk"
+    headers = {"Content-Type": "application/x-ndjson"}
+    auth = ("elastic", "password123")  # Adjust with your authentication
+
+    # Prepare the document for Elasticsearch
+    document = {
+        "timestamp": value[0],
+        "last_price": value[1],
+    }
+
+    # Prepare the bulk request data
+    action = json.dumps({
+        "index": {
+            "_index": tickername
         }
     })
     bulk_data = f"{action}\n{json.dumps(document)}\n"
@@ -266,16 +258,34 @@ def main():
         ])).set_parallelism(4)
     
 
+    specific_ticker_symbol = "MLAIR.FR"
+    specific_ticker_symbol_as_index= "mlair.fr"
+    ticker_filtered_stream = parsed_stream.filter(lambda x: x[1] == specific_ticker_symbol)
+
+    ticker_data_stream = ticker_filtered_stream.map(
+        lambda x: Row(x[0], x[4]),  # Only return timestamp_str and last_price
+        output_type=Types.ROW([
+            Types.STRING(),  # timestamp_str
+            Types.FLOAT()     # last_price
+        ])
+    )
+    ticker_data_stream.map(
+        lambda value: send_ticker_to_elasticsearch(value, specific_ticker_symbol_as_index)
+    ).set_parallelism(1)
     
+    logging.warning("Completed ticker streaming")
+
+
     env.set_parallelism(1)
+    
+    # Uncomment to enable EMA value printing and storing in the elasticsearch index 
+    '''
     windowed_stream.print().name("print windows stream")
     
-    ##windowed_stream.add_sink(ElasticsearchPostSink("ema_data")).set_parallelism(1)
-    ##windowed_stream.add_sink(ElasticsearchHttpProcessFunction("ema_data")).set_parallelism(1)
-    windowed_stream.map(send_to_elasticsearch).set_parallelism(1)
+    windowed_stream.map(send_ema_to_elasticsearch).set_parallelism(1)
 
-    logging.warning("Completed mapped streaming")
-    
+    logging.warning("Completed ema streaming")
+    '''
     # Execute the Flink job
     env.execute("Flink EMA Calculation and Breakout Detection")
 

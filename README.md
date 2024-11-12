@@ -59,4 +59,6 @@ Generate a Kibana token from the kibana pod
 run
 ``bin/kibana-verification-code``
 
-The user ``elastic`` should be created by default with password ``temp_password`` by the docker-compose.yml file. otherwise it can be recreated and password reset by entering the the elasticsearch pod. 
+The user ``elastic`` should be created by default with password ``password123`` by the docker-compose.yml file. otherwise it can be recreated and password reset by entering the the elasticsearch pod. 
+
+The elastic database and kibana is mainly in charge of displaying the ticker over time to the user

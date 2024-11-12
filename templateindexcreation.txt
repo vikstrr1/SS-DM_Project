@@ -40,6 +40,23 @@ curl -v -X PUT "https://172.18.0.1:9200/ema_data" \
         }
     }' --insecure
 
+## Create index for 
+curl -v -X PUT "https://172.18.0.1:9200/mlair.fr" \
+    -u elastic:password123 \
+    -H "Content-Type: application/json" \
+    -d '{
+        "settings": {
+            "number_of_shards": 1,
+            "number_of_replicas": 0
+        },
+        "mappings": {
+            "properties": {
+                "timestamp_str": {"type": "text"},
+                "last_price": {"type": "float"}
+            }
+        }
+    }' --insecure
+
 ## View list of indexes locally 
 curl -X GET "https://localhost:9200/_cat/indices?v" -u elastic:password123 --insecure
 ## PATH to view indices when inside jobmanager container
