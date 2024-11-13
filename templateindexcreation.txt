@@ -40,7 +40,7 @@ curl -v -X PUT "https://172.18.0.1:9200/ema_data" \
         }
     }' --insecure
 
-## Create index for 
+## Create index for financial instrument
 curl -v -X PUT "https://172.18.0.1:9200/mlair.fr" \
     -u elastic:password123 \
     -H "Content-Type: application/json" \

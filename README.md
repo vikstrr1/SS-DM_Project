@@ -62,3 +62,11 @@ run
 The user ``elastic`` should be created by default with password ``password123`` by the docker-compose.yml file. otherwise it can be recreated and password reset by entering the the elasticsearch pod. 
 
 The elastic database and kibana is mainly in charge of displaying the ticker over time to the user
+
+
+
+#### Questions on Q&A
+- Is the current visualization tool for stocks sufficient? Or should you as an user be able to change which stocks are monitored after starting the 
+- Currently the specified tickers are sent to elasticsearch to be visualized in kibana. 
+- Is it sufficient to just insert from csv file. What kind of improvements could we make here. Currently we are kind of frontrunning the "clock" because we have an historic dataset. 
+- 

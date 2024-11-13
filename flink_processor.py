@@ -193,7 +193,6 @@ def send_ema_to_elasticsearch(value):
     except requests.exceptions.RequestException as e:
         logging.error(f"Error during request: {e}")
 
-
 def send_ticker_to_elasticsearch(value, tickername):
     es_url = "https://172.18.0.1:9200/"+tickername+"/_bulk"
     headers = {"Content-Type": "application/x-ndjson"}
@@ -208,7 +207,8 @@ def send_ticker_to_elasticsearch(value, tickername):
     # Prepare the bulk request data
     action = json.dumps({
         "index": {
-            "_index": tickername
+            "_index": tickername,
+            "_id": f"{document['timestamp']}_{document['last_price']}"
         }
     })
     bulk_data = f"{action}\n{json.dumps(document)}\n"
@@ -222,6 +222,27 @@ def send_ticker_to_elasticsearch(value, tickername):
             logging.error(f"Failed to insert document. Status code: {response.status_code}, Response: {response.text}")
     except requests.exceptions.RequestException as e:
         logging.error(f"Error during request: {e}")
+
+def create_index_if_not_exists(index_name):
+    es_url = f"https://172.18.0.1:9200/{index_name}"
+    headers = {"Content-Type": "application/json"}
+    auth = ("elastic", "password123")
+    try:
+        response = requests.head(es_url, headers=headers, auth=auth, verify=False)
+        if response.status_code == 404:
+            # Index does not exist, create it
+            response = requests.put(es_url, headers=headers, auth=auth, verify=False)
+            if response.status_code == 200:
+                logging.info(f"Index '{index_name}' created successfully.")
+            else:
+                logging.error(f"Failed to create index '{index_name}'. Status code: {response.status_code}, Response: {response.text}")
+        elif response.status_code == 200:
+            logging.info(f"Index '{index_name}' already exists.")
+        else:
+            logging.error(f"Error checking index '{index_name}'. Status code: {response.status_code}, Response: {response.text}")
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error during request: {e}")
+
 
 def main():
     logging.warning("At least main is running successfully")
@@ -258,8 +279,10 @@ def main():
         ])).set_parallelism(4)
     
 
-    specific_ticker_symbol = "MLAIR.FR"
-    specific_ticker_symbol_as_index= "mlair.fr"
+    specific_ticker_symbol = "ALREW.FR"
+    specific_ticker_symbol_as_index= "alrew.fr"
+
+    create_index_if_not_exists(specific_ticker_symbol_as_index)
     ticker_filtered_stream = parsed_stream.filter(lambda x: x[1] == specific_ticker_symbol)
 
     ticker_data_stream = ticker_filtered_stream.map(
@@ -269,6 +292,8 @@ def main():
             Types.FLOAT()     # last_price
         ])
     )
+    ticker_data_stream.print().name("print tickers")
+
     ticker_data_stream.map(
         lambda value: send_ticker_to_elasticsearch(value, specific_ticker_symbol_as_index)
     ).set_parallelism(1)
