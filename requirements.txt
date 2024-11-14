@@ -2,3 +2,4 @@ apache-flink
 pyflink
 apache-beam
 elasticsearch
+kafka-python

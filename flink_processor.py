@@ -1,58 +1,43 @@
 import os
 from pyflink.common import Types, Row, Duration
+from pyflink.datastream.window import SlidingEventTimeWindows
 from pyflink.datastream.window import TumblingEventTimeWindows, TimeWindow
 from pyflink.datastream import ProcessWindowFunction, StreamExecutionEnvironment
 from pyflink.common.watermark_strategy import WatermarkStrategy, TimestampAssigner
 from pyflink.common.time import Time
+from pyflink.datastream.connectors import FlinkKafkaConsumer
 from pyflink.datastream.time_characteristic import TimeCharacteristic
+from pyflink.common.serialization import SimpleStringSchema
 import logging
 from datetime import datetime
 from typing import Iterable, Optional, Dict, Tuple
 
-
-from pyflink.common import Types
-
-import requests
 import json
-from pyflink.datastream import ProcessFunction
+import requests
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-def parse_event(line: str) -> Optional[Row]:
-    #logging.warning("Into parse_event")
+def parse_event(record: dict) -> Optional[Row]:
+    # Convert Kafka message to row format expected by Flink
     arrival_time = datetime.now().isoformat()
     try:
-        if line.startswith("#") or not line.strip():
-            #logging.debug(f"Ignoring comment or empty line: {line}")
+        symbol = record.get("ID")  # Adjusted to use 'ID' as the symbol identifier
+        sec_type = record.get("SecType")
+        timestamp_str = f"{record.get('Date')} {record.get('Time')}"
+        last_price = record.get("Last")
+        trading_time = record.get("Trading time")
+        trading_date = record.get("Trading date") or record.get('Date')
+        trading_timestamp_str = f"{trading_date} {trading_time}"
+        if not all([trading_timestamp_str,symbol, sec_type, last_price]):
             return None
-
-        fields = line.split(",")
-        if len(fields) < 39:
-            #logging.warning(f"Incomplete line, skipping: {line}")
-            return None
-
-        symbol = fields[0].strip()
-        sec_type = fields[1].strip()
-        timestamp_str = f"{fields[2].strip()} {fields[3].strip()}"
-        last_price = fields[21].strip()
-        trading_time = fields[23].strip()
-        trading_date = fields[26].strip()
-
-        try:
-            last_price = float(last_price) if last_price else None
-        except ValueError:
-            #logging.info(f"Invalid price format, skipping line: {line}")
-            return None
-
-        if not all([symbol, sec_type, trading_time, trading_date]) or last_price is None:
-            #logging.warning(f"Missing mandatory fields in line: {line}")
-            return None
+        last_price = float(last_price) if last_price else None
     except Exception as e:
-        #logging.error(f"Error parsing line: {e} for line: {line}")
+        logging.error(f"Error parsing record: {e} for record: {record}")
         return None
 
-    return Row(timestamp_str, symbol, sec_type, arrival_time, last_price, trading_time, trading_date)
+    return Row(trading_timestamp_str, symbol, sec_type, arrival_time, last_price)
+
 
 class SimpleTimestampAssigner(TimestampAssigner):
     def extract_timestamp(self, value, record_timestamp) -> int:
@@ -98,7 +83,7 @@ class EMAProcessFunction(ProcessWindowFunction[Row, Tuple[str, int, int, float, 
 
         start_time = datetime.fromtimestamp(context.window().start / 1000).strftime('%Y-%m-%d %H:%M:%S')
         end_time = datetime.fromtimestamp(context.window().end / 1000).strftime('%Y-%m-%d %H:%M:%S')
-
+        
         # Provide a default if any field might be None
         return [(key, start_time, end_time, ema_38 or 0.0, ema_100 or 0.0, advice_type or "", advice_timestamp or -1)]
 
@@ -248,22 +233,29 @@ def main():
     logging.warning("At least main is running successfully")
     env = StreamExecutionEnvironment.get_execution_environment()
     env.set_stream_time_characteristic(TimeCharacteristic.EventTime)
-    
-    data_dir = "/opt/flink/jobs/data/trading_data/debs2022-gc-trading-day-08-11-21.csv"
-    parsed_stream = env.read_text_file(data_dir) \
-        .map(parse_event, output_type=Types.ROW([
+
+    kafka_consumer = FlinkKafkaConsumer(
+        topics="financial_data",
+        properties={"bootstrap.servers": "kafka:9092", "group.id": "flink_consumer"},
+        deserialization_schema=SimpleStringSchema() 
+    )
+    kafka_consumer.set_start_from_earliest()
+    parsed_stream = env.add_source(kafka_consumer).map(
+        lambda record: parse_event(json.loads(record)),
+        output_type=Types.ROW([
             Types.STRING(),  # timestamp_str
             Types.STRING(),  # symbol
             Types.STRING(),  # sec_type
             Types.STRING(),  # arrival_time
-            Types.FLOAT(),   # last_price
-            Types.STRING(),  # trading_time
-            Types.STRING()   # trading_date
-        ])).filter(lambda x: x is not None)
+            Types.FLOAT()   # last_price
+        ])
+    ).filter(lambda x: x is not None)
+    
     watermark_strategy = WatermarkStrategy \
-        .for_bounded_out_of_orderness(Duration.of_minutes(1)) \
+        .for_bounded_out_of_orderness(Duration.of_seconds(10)) \
         .with_timestamp_assigner(SimpleTimestampAssigner())
-
+    #.window(SlidingEventTimeWindows.of(Time.minutes(5), Time.minutes(1)))
+    
     windowed_stream = parsed_stream \
         .assign_timestamps_and_watermarks(watermark_strategy) \
         .key_by(lambda x: x[1]) \
@@ -276,9 +268,9 @@ def main():
             Types.FLOAT(),   # EMA_100 (or defaulted)
             Types.STRING(),  # Breakout type (or "")
             Types.LONG()     # Breakout timestamp (or -1)
-        ])).set_parallelism(4)
+        ])).set_parallelism(4).filter(lambda x: x[6] != -1)
     
-
+    
     specific_ticker_symbol = "ALREW.FR"
     specific_ticker_symbol_as_index= "alrew.fr"
 
@@ -304,13 +296,13 @@ def main():
     env.set_parallelism(1)
     
     # Uncomment to enable EMA value printing and storing in the elasticsearch index 
-    '''
+    
     windowed_stream.print().name("print windows stream")
     
-    windowed_stream.map(send_ema_to_elasticsearch).set_parallelism(1)
+    #windowed_stream.map(send_ema_to_elasticsearch).set_parallelism(1)
 
     logging.warning("Completed ema streaming")
-    '''
+    
     # Execute the Flink job
     env.execute("Flink EMA Calculation and Breakout Detection")
 
