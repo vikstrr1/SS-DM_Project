@@ -18,7 +18,7 @@ COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Copy necessary Python scripts
-#COPY stream_emulator.py /opt/flink/jobs/
+COPY stream_emulator.py /opt/flink/jobs/
 COPY flink_processor.py /opt/flink/jobs/
 
 #Install Elasticsearch Python Client for saving the data.
@@ -29,9 +29,9 @@ RUN pip3 install elasticsearch
 RUN mkdir -p data/trading_data
 
 # Copy utility scripts and make them executable
-#COPY wait-for-it.sh .
-#COPY retry_stream_emulator.sh .
-#RUN chmod +x wait-for-it.sh retry_stream_emulator.sh
+COPY wait-for-it.sh .
+COPY retry_stream_emulator.sh .
+RUN chmod +x wait-for-it.sh retry_stream_emulator.sh
 
 # Create a symbolic link for python to point to python3 if it doesn't already exist
 RUN [ ! -e /usr/bin/python ] && ln -s /usr/bin/python3 /usr/bin/python || echo "Python link already exists"
