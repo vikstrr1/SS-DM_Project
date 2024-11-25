@@ -15,34 +15,43 @@ services:
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_LOG_RETENTION_MS: "86400000" # Retain logs for 30 minutes
+      KAFKA_LOG_SEGMENT_BYTES: "134217728"  # Set to 128 MB per segment
+      KAFKA_LOG_CLEANER_THREADS: "4"  # Use multiple cleaner threads
+      KAFKA_MAX_REQUEST_SIZE: "52428800"  # Increase max message size to 50 MB
+      KAFKA_MESSAGE_MAX_BYTES: "52428800"  # Match message size to request size
     ports:
       - "9092:9092"
     depends_on:
       - zookeeper
     networks:
-      - kafka_network
+      kafka_network:
+        aliases:
+          - kafka
+    ulimits:
+      nofile:
+        soft: 100000
+        hard: 100000
 
   flink-jobmanager:
-    build:  # Use Dockerfile in the current directory
-      context: .
-      dockerfile: Dockerfile
+    build: .
     environment:
       JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
     ports:
       - "8081:8081"
-    command: jobmanager
+    command: ["jobmanager", "sh", "-c", "cd .. && ./bin/flink run -py /opt/flink/jobs/flink_processor.py"]
     networks:
       - kafka_network
+      - elastic_network
     volumes:
-      - ./flink-sql-connector-kafka-3.3.0-1.20.jar:/opt/flink/lib/flink-sql-connector-kafka-3.3.0-1.20.jar  # Mount the JAR file
-      - ./data/trading_data:/opt/flink/jobs/data/trading_data 
+      - ./flink-sql-connector-kafka-3.3.0-1.20.jar:/opt/flink/lib/flink-sql-connector-kafka-3.3.0-1.20.jar
+      - ./data/trading_data:/opt/flink/jobs/data/trading_data
       - ./flink-sql-connector-elasticsearch7-3.0.1-1.17.jar:/opt/flink/lib/flink-connector-elasticsearch.jar
       - /tmp:/tmp
-    restart: always 
+    restart: always
+
   flink-taskmanager:
-    build:  # Use Dockerfile in the current directory
-      context: .
-      dockerfile: Dockerfile
+    build: .
     environment:
       JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
       TASK_MANAGER_NUMBER_OF_TASK_SLOTS: 4  # Set the number of task slots
@@ -54,44 +63,62 @@ services:
       - kafka_network
       - elastic_network
     volumes:
-      - ./flink-sql-connector-kafka-3.3.0-1.20.jar:/opt/flink/lib/flink-sql-connector-kafka-3.3.0-1.20.jar  # Mount the JAR file
+      - ./flink-sql-connector-kafka-3.3.0-1.20.jar:/opt/flink/lib/flink-sql-connector-kafka-3.3.0-1.20.jar
       - ./data/trading_data:/opt/flink/jobs/data/trading_data
       - ./flink-sql-connector-elasticsearch7-3.0.1-1.17.jar:/opt/flink/lib/flink-connector-elasticsearch.jar
-       - /tmp:/tmp
+      - /tmp:/tmp
+    deploy:
+      replicas: 1
     restart: always  
+
   stream-emulator:
     build: .
     volumes:
       - ./data:/opt/flink/jobs/data
-      - ./:/usr/src/app  # Mount the entire project directory
+      - ./:/usr/src/app
     command: ["./wait-for-it.sh", "kafka:9092", "--", "./retry_stream_emulator.sh"]
     depends_on:
       - kafka
     networks:
       - kafka_network
 
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.1.0
-    environment:
-      - discovery.type=single-node
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-      - ELASTIC_PASSWORD=password123
-    ports:
-      - "9200:9200"
-    networks:
-      - elastic_network
+  #elasticsearch:
+  #  image: docker.elastic.co/elasticsearch/elasticsearch:8.1.0
+  #  environment:
+  #    - discovery.type=single-node
+  #    - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+  #    - ELASTIC_PASSWORD=password123
+  #  ports:
+  #    - "9200:9200"
+  #  networks:
+  #    elastic_network:
+  #      ipv4_address: 192.168.1.100
 
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.1.0
+  #kibana:
+  #  image: docker.elastic.co/kibana/kibana:8.1.0
+  #  ports:
+  #    - "5601:5601"
+  #  networks:
+  #    - elastic_network
+  #  depends_on:
+  #    - elasticsearch
+
+  dashboard:
+    build: .
+    command: ["./wait-for-it.sh", "kafka:9092", "--", "python", "dashboard.py"]
     ports:
-      - "5601:5601"
-    networks:
-      - elastic_network
+      - "8040:8040"
     depends_on:
-      - elasticsearch
+      - kafka
+    networks:
+      - kafka_network
 
 networks:
   kafka_network:
     driver: bridge
   elastic_network:
     driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 192.168.1.0/24

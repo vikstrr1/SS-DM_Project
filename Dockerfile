@@ -3,7 +3,11 @@ FROM apache/flink:1.17.0
 
 # Set the working directory
 WORKDIR /opt/flink/jobs
+ENV SMTP_USER=ssdmprojecteerv@gmail.com
+ENV SMTP_PASS="quhbwuhjsfdsaouy"
+ENV SMTP_RECV=rasse.vikstrom@gmail.com
 
+ENV TICKER_SYMBOLS='[{"symbol": "ALREW.FR", "index": "alrew.fr"}, {"symbol": "INBGM.NL", "index": "inbgm.nl"}, {"symbol": "A1JX4P.ETR", "index": "a1jx4p.etr"}]'
 # Install necessary packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
@@ -20,7 +24,7 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 # Copy necessary Python scripts
 COPY stream_emulator.py /opt/flink/jobs/
 COPY flink_processor.py /opt/flink/jobs/
-
+COPY dashboard.py /opt/flink/jobs/
 #Install Elasticsearch Python Client for saving the data.
 RUN pip3 install elasticsearch
 
@@ -38,7 +42,6 @@ RUN [ ! -e /usr/bin/python ] && ln -s /usr/bin/python3 /usr/bin/python || echo "
 
 # Set the Python executable in Flink configuration
 RUN echo 'python.executable: /usr/bin/python3' >> /opt/flink/conf/flink-conf.yaml
-
 
 # Default entry point with CMD to start appropriate processes
 CMD ["./wait-for-it.sh", "kafka:9092", "--", "./retry_stream_emulator.sh"]
