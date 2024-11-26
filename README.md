@@ -42,12 +42,13 @@ TODO Add more description on how the
 
 Kibana is selected as the visualization tool for displaying the indexes created by the flink job. 
 ## With grafana and influxdb
-    Got to http://localhost:8086/ and login and obtain token for python processor.py script it should be avaible under python config
-    After that has been obtainend and put into python file
-    Run following command
-    ``docker-compose up --build kafka_to_influx``
-    Data will no be put into influxdb bucket and saved for one hour
-    login to both influx and grafana with user admin and password admin123 
+Go to http://localhost:8086/ and login and obtain token for python processor.py script it should be avaible under python config
+After that has been obtainend and put into python file
+Run following command
+``docker-compose up --build kafka_to_influx``
+Data will no be put into influxdb bucket and saved for one hour
+login to both influx and grafana with user admin and password admin123 
+grafana dashboard avaible at http://localhost:3000/
 
 ## Grafana
 
