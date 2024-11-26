@@ -41,6 +41,25 @@ ElasticSearch is selected as a temporary storage database of user-selected stora
 TODO Add more description on how the 
 
 Kibana is selected as the visualization tool for displaying the indexes created by the flink job. 
+## With grafana and influxdb
+    Got to http://localhost:8086/ and login and obtain token for python processor.py script it should be avaible under python config
+    After that has been obtainend and put into python file
+    Run following command
+    ``docker-compose up --build kafka_to_influx``
+    Data will no be put into influxdb bucket and saved for one hour
+    login to both influx and grafana with user admin and password admin123 
+
+## Grafana
+
+Go to Grafan and add datasource.
+First need to obtain a api key from influxdB named GRafana for example
+After that add
+host http://influxdb:8086/
+
+and the token then click save and test.
+
+Then choose the dashboard that is already up in grafana and follow the data
+##
 
 ### Configuration of ElasticSearch and Kibana
 Currently the ElasticSearch and Kibana needs to be configured on startup. Password and username can later  be set by docker-compose.yml file. 

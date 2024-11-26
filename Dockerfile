@@ -4,6 +4,12 @@ FROM apache/flink:1.17.0
 # Set the working directory
 WORKDIR /opt/flink/jobs
 
+ENV SMTP_USER=ssdmprojecteerv@gmail.com
+ENV SMTP_PASS=
+ENV SMTP_RECV=rasse.vikstrom@gmail.com
+
+ENV WATCH_LIST="AN.FR,TRAN.FR,HDF.FR,MLCAS.FR,A3CSAE.ETR,ALBOA.FR,DEE.FR,CTCT1.NL,VAPBS.FR,MLJDL.FR,ALREW.FR"
+
 # Install necessary packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
@@ -20,9 +26,10 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 # Copy necessary Python scripts
 COPY stream_emulator.py /opt/flink/jobs/
 COPY flink_processor.py /opt/flink/jobs/
+COPY visualization_server.py .
 
 #Install Elasticsearch Python Client for saving the data.
-RUN pip3 install elasticsearch
+#RUN pip3 install elasticsearch
 
 
 # Create data directories for the CSV files

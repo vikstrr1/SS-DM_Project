@@ -3,3 +3,4 @@ pyflink
 apache-beam
 elasticsearch
 kafka-python
+dash

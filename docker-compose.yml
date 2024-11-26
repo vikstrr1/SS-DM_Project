@@ -15,12 +15,18 @@ services:
       KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+      KAFKA_LOG_RETENTION_MS: "86400000" 
+      KAFKA_LOG_SEGMENT_BYTES: "134217728"  # Set to 128 MB per segment
+      KAFKA_LOG_CLEANER_THREADS: "4"  # Use multiple cleaner threads
+      KAFKA_MAX_REQUEST_SIZE: "52428800"  # Increase max message size to 50 MB
+      KAFKA_MESSAGE_MAX_BYTES: "52428800"
     ports:
       - "9092:9092"
     depends_on:
       - zookeeper
     networks:
       - kafka_network
+
 
   flink-jobmanager:
     build:  # Use Dockerfile in the current directory
@@ -45,14 +51,13 @@ services:
       dockerfile: Dockerfile
     environment:
       JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
-      TASK_MANAGER_NUMBER_OF_TASK_SLOTS: 4  # Set the number of task slots
+      TASK_MANAGER_NUMBER_OF_TASK_SLOTS: 4  # Set the number of task slots set based on the resources of machine
       FLINK_PROPERTIES: "taskmanager.numberOfTaskSlots=4"
     depends_on:
       - flink-jobmanager
     command: taskmanager
     networks:
       - kafka_network
-      - elastic_network
     volumes:
       - ./flink-sql-connector-kafka-3.3.0-1.20.jar:/opt/flink/lib/flink-sql-connector-kafka-3.3.0-1.20.jar  # Mount the JAR file
       - ./data/trading_data:/opt/flink/jobs/data/trading_data
@@ -70,28 +75,76 @@ services:
     networks:
       - kafka_network
 
-  elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.1.0
+  #dashboard:
+  #  build: .
+  #  command: ["./wait-for-it.sh", "kafka:9092", "--", "python", "visualization_server.py"]
+  #  ports:
+  #    - "8050:8050"
+  #  depends_on:
+  #    - kafka
+  #  networks:
+  #    - kafka_network
+
+  #elasticsearch:
+  #  image: docker.elastic.co/elasticsearch/elasticsearch:8.1.0
+  #  environment:
+  #    - discovery.type=single-node
+  #    - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+  #    - ELASTIC_PASSWORD=password123
+  #  ports:
+  #    - "9200:9200"
+  #  networks:
+  #    - elastic_network
+
+  #kibana:
+  #  image: docker.elastic.co/kibana/kibana:8.1.0
+  #  ports:
+  #    - "5601:5601"
+  #  networks:
+  #    - elastic_network
+  #  depends_on:
+  #    - elasticsearch
+  influxdb:
+    image: influxdb:2.7
+    ports:
+      - "8086:8086"
     environment:
-      - discovery.type=single-node
-      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-      - ELASTIC_PASSWORD=password123
-    ports:
-      - "9200:9200"
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: admin123
+      DOCKER_INFLUXDB_INIT_ORG: ticker_org
+      DOCKER_INFLUXDB_INIT_BUCKET: ticker_bucket
+      DOCKER_INFLUXDB_INIT_RETENTION: 1h  # Retain data for 1 hour
     networks:
-      - elastic_network
-
-  kibana:
-    image: docker.elastic.co/kibana/kibana:8.1.0
+      - kafka_network
+      
+  grafana:
+    image: grafana/grafana-oss:10.0.3
     ports:
-      - "5601:5601"
-    networks:
-      - elastic_network
+      - "3000:3000"
     depends_on:
-      - elasticsearch
+      - influxdb
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+    networks:
+      - kafka_network
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana:/etc/grafana/provisioning/dashboards
 
+  kafka_to_influx:
+    build:
+      context: docker/.
+      dockerfile: Dockerfile
+    depends_on:
+      - kafka
+      - influxdb
+    networks:
+      - kafka_network
 networks:
   kafka_network:
     driver: bridge
-  elastic_network:
-    driver: bridge
+volumes:
+  grafana-data:
+  influxdb-data:
