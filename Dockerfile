@@ -49,3 +49,4 @@ RUN echo 'python.executable: /usr/bin/python3' >> /opt/flink/conf/flink-conf.yam
 
 # Default entry point with CMD to start appropriate processes
 CMD ["./wait-for-it.sh", "kafka:9092", "--", "./retry_stream_emulator.sh"]
+
