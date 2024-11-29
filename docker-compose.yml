@@ -42,7 +42,6 @@ services:
     command: ["jobmanager", "sh", "-c", "cd .. && ./bin/flink run -py /opt/flink/jobs/flink_processor.py"]
     networks:
       - kafka_network
-      - elastic_network
     volumes:
       - ./flink-sql-connector-kafka-3.3.0-1.20.jar:/opt/flink/lib/flink-sql-connector-kafka-3.3.0-1.20.jar
       - ./data/trading_data:/opt/flink/jobs/data/trading_data

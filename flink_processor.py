@@ -1,5 +1,6 @@
 import os
 from pyflink.common import Types, Row, Duration
+from pyflink.datastream.state import ValueStateDescriptor
 from pyflink.datastream.window import SlidingEventTimeWindows
 from pyflink.datastream.window import TumblingEventTimeWindows, TimeWindow
 from pyflink.datastream import ProcessWindowFunction, StreamExecutionEnvironment
@@ -8,24 +9,17 @@ from pyflink.common.time import Time
 from pyflink.datastream.connectors import FlinkKafkaConsumer, FlinkKafkaProducer
 from pyflink.datastream.time_characteristic import TimeCharacteristic
 from pyflink.common.serialization import SimpleStringSchema
-from pyflink.datastream.state import ValueStateDescriptor
-from pyflink.datastream import SinkFunction, RuntimeContext
+from pyflink.datastream import SinkFunction
 from pyflink.datastream.formats.json import JsonRowSerializationSchema
-from pyflink.common import RestartStrategies
 import logging
 from datetime import datetime
 from typing import Iterable, Optional, Dict, Tuple
 
+import json
+import requests
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-
-
-import json
-import requests
-
-# Configure logging
-logging.basicConfig(level=logging.WARNING)
 TIMESTAMP_FORMAT = "%d-%m-%Y %H:%M:%S.%f"
 smtp_user = os.getenv('SMTP_USER')
 smtp_pass = os.getenv('SMTP_PASS')
@@ -59,11 +53,12 @@ def send_email(subject, body):
 
 def parse_event(record: dict) -> Optional[Row]:
     # Convert Kafka message to row format expected by Flink
+    arrival_time = datetime.now().isoformat()
     try:
         symbol = record.get("ID")  # Adjusted to use 'ID' as the symbol identifier
         sec_type = record.get("SecType")
         #Not really needed
-        #timestamp_str = f"{record.get('Date')} {record.get('Time')}"
+        ##timestamp_str = f"{record.get('Date')} {record.get('Time')}"
         last_price = record.get("Last")
         trading_time = record.get("Trading time")
         trading_date = record.get("Trading date") or record.get('Date')
@@ -75,9 +70,7 @@ def parse_event(record: dict) -> Optional[Row]:
         logging.error(f"Error parsing record: {e} for record: {record}")
         return None
 
-    return Row(trading_timestamp_str, symbol, sec_type, datetime.now().isoformat(), last_price)
-
-
+    return Row(trading_timestamp_str, symbol, sec_type, arrival_time, last_price)
 
 
 class SimpleTimestampAssigner(TimestampAssigner):
@@ -85,43 +78,50 @@ class SimpleTimestampAssigner(TimestampAssigner):
         if value is None:
             logging.warning("Received None as value, discarding event.")
             return -1
-
         iso_timestamp = value[0]
         if not iso_timestamp:
             logging.warning(f"iso_timestamp is None or empty: {iso_timestamp}, discarding event.")
             return -1
-
         try:
             dt = datetime.strptime(iso_timestamp, TIMESTAMP_FORMAT)
             logging.debug(f"Parsed timestamp: {dt}")
+            dt = datetime.strptime(iso_timestamp, "%d-%m-%Y %H:%M:%S.%f")
+            #logging.debug(f"Parsed timestamp: {dt}")
             return int(dt.timestamp() * 1000)
         except ValueError as e:
             logging.error(f"Timestamp parsing failed for {iso_timestamp}: {e}")
             return -1
 
-class EMAProcessFunction(ProcessWindowFunction[Row, Tuple[str, str, str, float, float, str, int, float], str, TimeWindow]):
-    def __init__(self):
-        self.ema_state_38 = None
-        self.ema_state_100 = None
-
+class EMAProcessFunction(ProcessWindowFunction[
+    Row,
+    Tuple[str, str, str, Optional[float], Optional[float], str, Optional[int], Optional[float]],
+    str,
+    TimeWindow
+]):
     def open(self, runtime_context):
-        # Define ValueState for each EMA to persist across windows
-        self.ema_state_38 = runtime_context.get_state(ValueStateDescriptor("ema_38", Types.FLOAT()))
-        self.ema_state_100 = runtime_context.get_state(ValueStateDescriptor("ema_100", Types.FLOAT()))
+        # Define ValueStateDescriptors for EMA state storage
+        self.previous_ema_38_state = runtime_context.get_state(
+            ValueStateDescriptor("previous_ema_38", Types.FLOAT()))
+        self.previous_ema_100_state = runtime_context.get_state(
+            ValueStateDescriptor("previous_ema_100", Types.FLOAT()))
 
-    def process(self, key: str, context: ProcessWindowFunction.Context[TimeWindow], elements: Iterable[Row]) -> Iterable[Tuple[str, str, str, float, float, str, int, float]]:
-        prices = [element[4] for element in elements if element[4] is not None]
-        arrival_times = [element[3] for element in elements if element[3] is not None]
+    def process(self, key: str, context: ProcessWindowFunction.Context[TimeWindow], elements: Iterable[Row]) -> Iterable[
+        Tuple[str, str, str, Optional[float], Optional[float], str, Optional[int], Optional[float]]]:
+        last_element = next(reversed(elements), None)  # Efficiently get the last element
 
-        if not prices:
-            logging.warning(f"No valid prices for symbol {key} in this window, skipping EMA calculation.")
-            return []
+        if last_element is None:
+            return []  # No elements in this window, so nothing to process
 
-        # Get the last price and arrival time
-        price = prices[-1]
-        arrival_time = arrival_times[-1]
+        # Extract the necessary data from the last element
+        price = last_element[4]  # Last price
+        date = last_element[3]   # Date
+        latency = None
 
-        # Calculate EMA smoothing factors
+        # Retrieve previous EMA values from state
+        previous_ema_38 = self.previous_ema_38_state.value()
+        previous_ema_100 = self.previous_ema_100_state.value()
+
+        # Calculate EMA and handle None values
         alpha_38 = 2 / (38 + 1)
         alpha_100 = 2 / (100 + 1)
 
@@ -142,22 +142,17 @@ class EMAProcessFunction(ProcessWindowFunction[Row, Tuple[str, str, str, float, 
             last_arrival_time = datetime.strptime(arrival_time, "%Y-%m-%dT%H:%M:%S.%f").timestamp()
             latency = datetime.now().timestamp() - last_arrival_time
 
-        # Update EMA state with the final values for this window
-        self.ema_state_38.update(ema_38)
-        self.ema_state_100.update(ema_100)
+        #start_time = datetime.fromtimestamp(context.window().start / 1000).strftime('%Y-%m-%d %H:%M:%S')
+        #end_time = datetime.fromtimestamp(context.window().end / 1000).strftime('%Y-%m-%d %H:%M:%S')
+        return [(key, context.window().start, context.window().end, ema_38 or 0.0, ema_100 or 0.0, advice_type or "", advice_timestamp or -1, latency)]
 
-        # Calculate window start and end times
-        start_time = datetime.fromtimestamp(context.window().start / 1000).strftime('%Y-%m-%d %H:%M:%S')
-        end_time = datetime.fromtimestamp(context.window().end / 1000).strftime('%Y-%m-%d %H:%M:%S')
-
-        # Return results
-        return [(key, start_time, end_time, ema_38, ema_100, advice_type or "", advice_timestamp or -1, latency or -1)]
-
-
-    def calculate_ema(self, current_price: float, previous_ema: float, alpha: float) -> float:
+    def calculate_ema(self, current_price: float, previous_ema: Optional[float], alpha: float) -> float:
+        if previous_ema is None:
+            logging.debug(f"No previous EMA, using current price for EMA calculation: {current_price}")
+            return current_price
         return (alpha * current_price) + ((1 - alpha) * previous_ema)
 
-    def check_advice(self, previous_ema_38: float, previous_ema_100: float, ema_38: float, ema_100: float, symbol: str, context: ProcessWindowFunction.Context[TimeWindow]) -> Tuple[str, Optional[int]]:
+    def check_advice(self, previous_ema_38: Optional[float], previous_ema_100: Optional[float], ema_38: float, ema_100: float, symbol: str, context: ProcessWindowFunction.Context[TimeWindow]) -> Tuple[str, Optional[int]]:
         advice_type = None
         advice_timestamp = None
         if previous_ema_38 is not None and previous_ema_100 is not None:
@@ -165,136 +160,16 @@ class EMAProcessFunction(ProcessWindowFunction[Row, Tuple[str, str, str, float, 
             if ema_38 > ema_100 and previous_ema_38 <= previous_ema_100:
                 advice_type = "Buy"
                 advice_timestamp = context.current_processing_time()
-                logging.info(f"Bullish breakout detected - Buy advice generated.")
-                #send_email(f"EMA Buy Signal for {symbol}", f"Symbol: {symbol}\nAdvice: Buy\nTimestamp: {advice_timestamp}")
-            # Bearish breakout: EMA38 crosses below EMA100
+                if symbol in watch_list:
+                    send_email(f"EMA Buy Signal for {symbol}", f"Symbol: {symbol}\nAdvice: Buy\nTimestamp: {advice_timestamp}")
+                logging.info(f"Bullish breakout detected for {symbol} - Buy advice generated.")
             elif ema_100 > ema_38 and previous_ema_100 <= previous_ema_38:
                 advice_type = "Sell"
                 advice_timestamp = context.current_processing_time()
-                logging.info(f"Bearish breakout detected - Sell advice generated.")
-                #send_email(f"EMA Sell Signal for {symbol}", f"Symbol: {symbol}\nAdvice: Sell\nTimestamp: {advice_timestamp}")
-        
+                if symbol in watch_list:
+                    send_email(f"EMA Sell Signal for {symbol}", f"Symbol: {symbol}\nAdvice: Sell\nTimestamp: {advice_timestamp}")
+                logging.info(f"Bearish breakout detected for {symbol} - Sell advice generated.")
         return advice_type, advice_timestamp
-    
-    
-
-def insert_static_data(index_name, data):
-    # Elasticsearch URL (adjust the host/port as needed)
-    es_url = f"https://192.168.1.100:9200/{index_name}/_bulk"
-
-    # Prepare the bulk request data
-    bulk_data = ""
-    for entry in data:
-        document = {
-            "timestamp": entry[0],
-            "symbol": entry[1],
-            "type": entry[2]
-        }
-
-        # Prepare the action and the document in the bulk request format
-        action = json.dumps({
-            "index": {
-                "_index": index_name
-            }
-        })
-        bulk_data += action + "\n" + json.dumps(document) + "\n"
-
-    # Make a POST request to insert documents in bulk
-    headers = {"Content-Type": "application/x-ndjson"}
-    try:
-        response = requests.post(es_url, data=bulk_data, auth=("elastic", "password123"), headers=headers, verify=False)
-        
-        if response.status_code == 200:
-            print(f"Successfully inserted {len(data)} documents.")
-        else:
-            print(f"Failed to insert documents. Status code: {response.status_code}, Response: {response.text}")
-    
-    except requests.exceptions.RequestException as e:
-        print(f"Error during request: {e}")
-
-def send_ema_to_elasticsearch(value):
-    es_url = "https://192.168.1.100:9200/ema_data/_bulk"
-    headers = {"Content-Type": "application/x-ndjson"}
-    auth = ("elastic", "password123")  # Adjust with your authentication
-
-    # Prepare the document for Elasticsearch
-    document = {
-        "timestamp": value[0],
-        "symbol": value[1],
-        "type": value[2],
-        "ema_38": value[3],
-        "ema_100": value[4],
-        "advice": value[5],
-        "advice_timestamp": value[6]
-    }
-
-    # Prepare the bulk request data
-    action = json.dumps({
-        "index": {
-            "_index": "ema_data"
-        }
-    })
-    bulk_data = f"{action}\n{json.dumps(document)}\n"
-
-    # Send the bulk data to Elasticsearch via the POST request
-    try:
-        response = requests.post(es_url, data=bulk_data, headers=headers, auth=auth, verify=False)
-        if response.status_code == 200:
-            logging.info(f"Successfully inserted document: {document}")
-        else:
-            logging.error(f"Failed to insert document. Status code: {response.status_code}, Response: {response.text}")
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error during request: {e}")
-
-def send_ticker_to_elasticsearch(value, tickername):
-    es_url = "https://192.168.1.100:9200/"+tickername+"/_bulk"
-    headers = {"Content-Type": "application/x-ndjson"}
-    auth = ("elastic", "password123")  # Adjust with your authentication
-
-    # Prepare the document for Elasticsearch
-    document = {
-        "timestamp": value[0],
-        "last_price": value[1],
-    }
-
-    # Prepare the bulk request data
-    action = json.dumps({
-        "index": {
-            "_index": tickername,
-            "_id": f"{document['timestamp']}_{document['last_price']}"
-        }
-    })
-    bulk_data = f"{action}\n{json.dumps(document)}\n"
-
-    # Send the bulk data to Elasticsearch via the POST request
-    try:
-        response = requests.post(es_url, data=bulk_data, headers=headers, auth=auth, verify=False)
-        if response.status_code == 200:
-            logging.info(f"Successfully inserted document: {document}")
-        else:
-            logging.error(f"Failed to insert document. Status code: {response.status_code}, Response: {response.text}")
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error during request: {e}")
-
-def create_index_if_not_exists(index_name):
-    es_url = f"https://192.168.1.100:9200/{index_name}"
-    headers = {"Content-Type": "application/json"}
-    auth = ("elastic", "password123")
-    try:
-        response = requests.head(es_url, headers=headers, auth=auth, verify=False)
-        if response.status_code == 404:
-            # Index does not exist, create it
-            response = requests.put(es_url, headers=headers, auth=auth, verify=False)
-            if response.status_code == 200:
-                logging.info(f"Index '{index_name}' created successfully.")
-            else:
-                logging.error(f"Failed to create index '{index_name}'. Status code: {response.status_code}, Response: {response.text}")
-        elif response.status_code == 200:
-            logging.info(f"Index '{index_name}' already exists.")
-        else:
-            logging.error(f"Error checking index '{index_name}'. Status code: {response.status_code}, Response: {response.text}")
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error during request: {e}")
 
 class KafkaSink(SinkFunction):
     def __init__(self, kafka_producer):
@@ -334,12 +209,14 @@ def setup_kafka_producer():
 def setup_ema_kafka_producer():
     # Define the serialization schema for the `Row` type specific to EMA
     row_type_info = Types.ROW([
-        Types.STRING(),  # symbol
-        Types.FLOAT(),  # EMA_38
-        Types.FLOAT(),  # EMA_100
-        Types.STRING(),  # advice
-        Types.LONG(),  # advice timestamp
-        Types.LONG()  # latency
+        Types.STRING(),  # Symbol
+        Types.LONG(),    # Window start
+        Types.LONG(),    # Window end
+        Types.FLOAT(),   # EMA_38 (or defaulted)
+        Types.FLOAT(),   # EMA_100 (or defaulted)
+        Types.STRING(),  # Breakout type (or "")
+        Types.LONG(),     # Breakout timestamp (or -1)
+        Types.LONG()        #Latency
     ])
     serialization_schema = JsonRowSerializationSchema.builder() \
         .with_type_info(row_type_info) \
@@ -352,20 +229,17 @@ def setup_ema_kafka_producer():
         producer_config={"bootstrap.servers": "kafka:9092"}
     )
 
+
 def main():
-    #logging.warning("At least main is running successfully")
+    logging.warning("At least main is running successfully")
     env = StreamExecutionEnvironment.get_execution_environment()
-    env.set_restart_strategy(RestartStrategies.fixed_delay_restart(3, 10000))
-    env.set_stream_time_characteristic(TimeCharacteristic.EventTime)
+    env.set_restart_strategy(RestartStrategies.fixed_delay_restart(3, 10))
+    #set parallism depending on resources available
     env.set_parallelism(4)
     kafka_consumer = FlinkKafkaConsumer(
         topics="financial_data",
-        properties={"bootstrap.servers": "kafka:9092", "group.id": "flink_consumer","max.poll.interval.ms": "600000","max.poll.records": "10000"},
-        deserialization_schema=SimpleStringSchema() 
-    )
-   
-    
-    #Uncomment line for flink to take data from earliest instead of waiting for all to be loaded
+        properties={"bootstrap.servers": "kafka:9092", "group.id": "flink_consumer","max.poll.interval.ms": "600000","max.poll.records": "100000"},
+        deserialization_schema=SimpleStringSchema())
     kafka_consumer.set_start_from_latest()
     parsed_stream = env.add_source(kafka_consumer).map(
         lambda record: parse_event(json.loads(record)),
@@ -377,25 +251,39 @@ def main():
             Types.FLOAT()   # last_price
         ])
     ).filter(lambda x: x is not None)
-
-    #env.set_parallelism(1)
-    watermark_strategy =WatermarkStrategy \
-        .for_bounded_out_of_orderness(Duration.of_seconds(5)) \
-        .with_timestamp_assigner(SimpleTimestampAssigner()) \
-        .with_idleness(Duration.of_seconds(5))
-   
-    #Sliding window
+    
+    watermark_strategy = WatermarkStrategy \
+        .for_bounded_out_of_orderness(Duration.of_seconds(10)) \
+        .with_timestamp_assigner(SimpleTimestampAssigner())
     #.window(SlidingEventTimeWindows.of(Time.minutes(5), Time.minutes(1)))
-    #Tumbling window
-    #.window(TumblingEventTimeWindows.of(Time.minutes(5)))
+    
     windowed_stream = parsed_stream \
         .assign_timestamps_and_watermarks(watermark_strategy) \
         .key_by(lambda x: x[1]) \
         .window(TumblingEventTimeWindows.of(Time.minutes(5))) \
         .process(EMAProcessFunction(), Types.TUPLE([
             Types.STRING(),  # Symbol
-            Types.STRING(),    # Window start
-            Types.STRING(),    # Window end
+            Types.LONG(),    # Window start
+            Types.LONG(),    # Window end
+            Types.FLOAT(),   # EMA_38 (or defaulted)
+            Types.FLOAT(),   # EMA_100 (or defaulted)
+            Types.STRING(),  # Breakout type (or "")
+            Types.LONG()     # Breakout timestamp (or -1)
+        ])).set_parallelism(4).filter(lambda x: x[6] != -1)
+    
+    
+    specific_ticker_symbol = "ALREW.FR"
+    specific_ticker_symbol_as_index= "alrew.fr"
+
+    create_index_if_not_exists(specific_ticker_symbol_as_index)
+    ticker_filtered_stream = parsed_stream.filter(lambda x: x[1] == specific_ticker_symbol)
+
+    ticker_data_stream = ticker_filtered_stream.map(
+        lambda x: Row(x[0], x[4]),  # Only return timestamp_str and last_price
+        output_type=Types.ROW([
+            Types.STRING(),  # Symbol
+            Types.LONG(),    # Window start
+            Types.LONG(),    # Window end
             Types.FLOAT(),   # EMA_38 (or defaulted)
             Types.FLOAT(),   # EMA_100 (or defaulted)
             Types.STRING(),  # Breakout type (or "")
@@ -417,46 +305,32 @@ def main():
         ])
     )
     ema_stream.add_sink(ema_kafka_producer)
-   
     
-    #env.set_parallelism(1)
+    
+    
     kafka_producer_ticker = setup_kafka_producer()
-    for ticker in ticker_symbols:
-        specific_ticker_symbol = ticker["symbol"]
-        specific_ticker_symbol_as_index = ticker["index"]
-
-        # Ensure the index exists
-        #create_index_if_not_exists(specific_ticker_symbol_as_index)
-
-        # Filter the stream for the specific ticker
-        ticker_filtered_stream = parsed_stream.filter(lambda x: x[1] == specific_ticker_symbol)
-
-        # Extract timestamp and last price for the ticker
-        ticker_data_stream = ticker_filtered_stream.map(
+    # Send the ticker data to Kafka
+    #ticker_filtered_stream = parsed_stream.filter(lambda x: x[1] )
+    ticker_data_stream = parsed_stream.map(
             lambda x: Row(x[0], x[1], x[4]),  # Include timestamp_str, symbol, and last_price
             output_type=Types.ROW([Types.STRING(), Types.STRING(), Types.FLOAT()])  # Define output schema
         )
-        ticker_data_stream.add_sink(kafka_producer_ticker)
-        #ticker_data_stream.map(
-        #    lambda value: send_ticker_to_elasticsearch(value, specific_ticker_symbol_as_index)
-        #)
-        # Print the ticker data for debugging
-        #ticker_data_stream.print().name(f"print {specific_ticker_symbol}")
+    ticker_data_stream.add_sink(kafka_producer_ticker)
 
-        # Send the ticker data to Elasticsearch
-        
-
+    #ticker_data_stream.map(
+    #    lambda value: send_ticker_to_elasticsearch(value, specific_ticker_symbol_as_index)
+    #)
     
-    #logging.warning("Completed ticker streaming")
+    logging.warning("Completed ticker streaming")
 
 
-    #env.set_parallelism(6)
+   
     
     # Uncomment to enable EMA value printing and storing in the elasticsearch index 
     
     #windowed_stream.print().name("print windows stream")
+    #windowed_stream.print().name("print windows stream")
     
-    #windowed_stream.map(send_ema_to_elasticsearch).set_parallelism(1)
 
     logging.warning("Completed ema streaming")
     
