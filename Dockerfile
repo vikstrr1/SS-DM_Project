@@ -4,9 +4,9 @@ FROM apache/flink:1.17.0
 # Set the working directory
 WORKDIR /opt/flink/jobs
 
-ENV SMTP_USER=ssdmprojecteerv@gmail.com
-ENV SMTP_PASS=
-ENV SMTP_RECV=rasse.vikstrom@gmail.com
+ENV SMTP_USER=${SMTP_RECV}
+ENV SMTP_PASS=${SMTP_PASS}
+ENV SMTP_RECV=${SMTP_RECV}
 
 ENV WATCH_LIST="AN.FR,TRAN.FR,HDF.FR,MLCAS.FR,A3CSAE.ETR,ALBOA.FR,DEE.FR,CTCT1.NL,VAPBS.FR,MLJDL.FR,ALREW.FR"
 

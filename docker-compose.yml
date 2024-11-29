@@ -32,8 +32,13 @@ services:
     build:  # Use Dockerfile in the current directory
       context: .
       dockerfile: Dockerfile
+    env_file:
+      - .env  # Load environment variables from the .env file
     environment:
       JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
+      SMTP_RECV: ${SMTP_RECV}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_USER: ${SMTP_USER}
     ports:
       - "8081:8081"
     command: jobmanager
@@ -108,6 +113,8 @@ services:
     image: influxdb:2.7
     ports:
       - "8086:8086"
+    env_file:
+      - .env
     environment:
       DOCKER_INFLUXDB_INIT_MODE: setup
       DOCKER_INFLUXDB_INIT_USERNAME: admin
@@ -115,6 +122,7 @@ services:
       DOCKER_INFLUXDB_INIT_ORG: ticker_org
       DOCKER_INFLUXDB_INIT_BUCKET: ticker_bucket
       DOCKER_INFLUXDB_INIT_RETENTION: 1h  # Retain data for 1 hour
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN}
     networks:
       - kafka_network
       
@@ -127,6 +135,14 @@ services:
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_DATASOURCE_NAME=influxdb
+      - GF_DATASOURCE_TYPE=influxdb
+      - GF_DATASOURCE_URL=http://influxdb:8086
+      - GF_DATASOURCE_ACCESS=proxy
+      - GF_DATASOURCE_INFLUXDB_VERSION=2
+      - GF_DATASOURCE_INFLUXDB_TOKEN=${INFLUXDB_TOKEN}  # Ensure token is read correctly from .env file
+      - GF_DATASOURCE_INFLUXDB_ORG=${DOCKER_INFLUXDB_INIT_ORG}
+      - GF_DATASOURCE_INFLUXDB_BUCKET=${DOCKER_INFLUXDB_INIT_BUCKET}
     networks:
       - kafka_network
     volumes:
@@ -140,6 +156,8 @@ services:
     depends_on:
       - kafka
       - influxdb
+    env_file:
+      - .env
     networks:
       - kafka_network
 networks:

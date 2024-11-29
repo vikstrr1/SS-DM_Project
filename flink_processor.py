@@ -1,5 +1,6 @@
 import os
 from pyflink.common import Types, Row, Duration
+from pyflink.datastream.state import ValueStateDescriptor
 from pyflink.datastream.window import SlidingEventTimeWindows
 from pyflink.datastream.window import TumblingEventTimeWindows, TimeWindow
 from pyflink.datastream import ProcessWindowFunction, StreamExecutionEnvironment
@@ -22,11 +23,12 @@ from email.mime.text import MIMEText
 smtp_user = os.getenv('SMTP_USER')
 smtp_pass = os.getenv('SMTP_PASS')
 smtp_recv = os.getenv('SMTP_RECV')
-
+watch_list = os.getenv('WATCH_LIST').split(',')
 # Configure logging
 logging.basicConfig(level=logging.WARNING)
 
 def send_email(subject, body):
+    print(watch_list)
     try:
         # Setup the MIME
         message = MIMEMultipart()
@@ -43,7 +45,7 @@ def send_email(subject, body):
         server.login(smtp_user, smtp_pass)
         text = message.as_string()
         #uncomment for actual sending
-        #server.sendmail(smtp_user, smtp_recv, text)
+        server.sendmail(smtp_user, smtp_recv, text)
         server.quit()
 
         #logging.info(f"Email sent to {smtp_recv} with subject: {subject}")
@@ -57,7 +59,7 @@ def parse_event(record: dict) -> Optional[Row]:
     try:
         symbol = record.get("ID")  # Adjusted to use 'ID' as the symbol identifier
         sec_type = record.get("SecType")
-        timestamp_str = f"{record.get('Date')} {record.get('Time')}"
+        #timestamp_str = f"{record.get('Date')} {record.get('Time')}"
         last_price = record.get("Last")
         trading_time = record.get("Trading time")
         trading_date = record.get("Trading date") or record.get('Date')
@@ -91,39 +93,56 @@ class SimpleTimestampAssigner(TimestampAssigner):
             logging.error(f"Timestamp parsing failed for {iso_timestamp}: {e}")
             return -1
 
-class EMAProcessFunction(ProcessWindowFunction[Row, Tuple[str, int, int, float, float, str, Optional[int]], str, TimeWindow]):
-    def __init__(self):
-        self.previous_ema: Dict[str, Tuple[Optional[float], Optional[float]]] = {}
+class EMAProcessFunction(ProcessWindowFunction[
+    Row,
+    Tuple[str, str, str, Optional[float], Optional[float], str, Optional[int], Optional[float]],
+    str,
+    TimeWindow
+]):
+    def open(self, runtime_context):
+        # Define ValueStateDescriptors for EMA state storage
+        self.previous_ema_38_state = runtime_context.get_state(
+            ValueStateDescriptor("previous_ema_38", Types.FLOAT()))
+        self.previous_ema_100_state = runtime_context.get_state(
+            ValueStateDescriptor("previous_ema_100", Types.FLOAT()))
 
-    def process(self, key: str, context: ProcessWindowFunction.Context[TimeWindow], elements: Iterable[Row]) -> Iterable[Tuple[str, int, int, Optional[float], Optional[float], str, Optional[int]]]:
-        prices = [element[4] for element in elements if element[4] is not None]
-        dates = [element[3] for element in elements if element[4] is not None]
+    def process(self, key: str, context: ProcessWindowFunction.Context[TimeWindow], elements: Iterable[Row]) -> Iterable[
+        Tuple[str, str, str, Optional[float], Optional[float], str, Optional[int], Optional[float]]]:
+        last_element = next(reversed(elements), None)  # Efficiently get the last element
+
+        if last_element is None:
+            return []  # No elements in this window, so nothing to process
+
+        # Extract the necessary data from the last element
+        price = last_element[4]  # Last price
+        date = last_element[3]   # Date
         latency = None
-        if not prices:
-            #logging.warning(f"No valid prices for symbol {key} in this window, skipping EMA calculation.")
-            return []
+
+        # Retrieve previous EMA values from state
+        previous_ema_38 = self.previous_ema_38_state.value()
+        previous_ema_100 = self.previous_ema_100_state.value()
 
         # Calculate EMA and handle None values
         alpha_38 = 2 / (38 + 1)
         alpha_100 = 2 / (100 + 1)
 
-        previous_ema_38, previous_ema_100 = self.previous_ema.get(key, (None, None))
+        ema_38 = self.calculate_ema(price, previous_ema_38, alpha_38)
+        ema_100 = self.calculate_ema(price, previous_ema_100, alpha_100)
 
-        ema_38 = self.calculate_ema(prices[-1], previous_ema_38, alpha_38)
-        ema_100 = self.calculate_ema(prices[-1], previous_ema_100, alpha_100)
-        
         # Check for breakout patterns and assign advice
-        advice_type, advice_timestamp = self.check_advice(previous_ema_38, previous_ema_100, ema_38, ema_100,key, context)
-        self.previous_ema[key] = (ema_38, ema_100)
+        advice_type, advice_timestamp = self.check_advice(previous_ema_38, previous_ema_100, ema_38, ema_100, key, context)
+
+        # Update state with new EMA values
+        self.previous_ema_38_state.update(ema_38)
+        self.previous_ema_100_state.update(ema_100)
+
         if advice_type:
-            last_arrival_time = datetime.strptime(dates[-1], "%Y-%m-%dT%H:%M:%S.%f").timestamp()
+            last_arrival_time = datetime.strptime(date, "%Y-%m-%dT%H:%M:%S.%f").timestamp()
             latency = datetime.now().timestamp() - last_arrival_time
-            
-        start_time = datetime.fromtimestamp(context.window().start / 1000).strftime('%Y-%m-%d %H:%M:%S')
-        end_time = datetime.fromtimestamp(context.window().end / 1000).strftime('%Y-%m-%d %H:%M:%S')
-        
-        # Provide a default if any field might be None
-        return [(key, start_time, end_time, ema_38 or 0.0, ema_100 or 0.0, advice_type or "", advice_timestamp or -1, latency)]
+
+        #start_time = datetime.fromtimestamp(context.window().start / 1000).strftime('%Y-%m-%d %H:%M:%S')
+        #end_time = datetime.fromtimestamp(context.window().end / 1000).strftime('%Y-%m-%d %H:%M:%S')
+        return [(key, context.window().start, context.window().end, ema_38 or 0.0, ema_100 or 0.0, advice_type or "", advice_timestamp or -1, latency)]
 
     def calculate_ema(self, current_price: float, previous_ema: Optional[float], alpha: float) -> float:
         if previous_ema is None:
@@ -131,25 +150,21 @@ class EMAProcessFunction(ProcessWindowFunction[Row, Tuple[str, int, int, float, 
             return current_price
         return (alpha * current_price) + ((1 - alpha) * previous_ema)
 
-    def check_advice(self, previous_ema_38: Optional[float], previous_ema_100: Optional[float], ema_38: float, ema_100: float,symbol: str, context: ProcessWindowFunction.Context[TimeWindow]) -> Tuple[str, Optional[int]]:
+    def check_advice(self, previous_ema_38: Optional[float], previous_ema_100: Optional[float], ema_38: float, ema_100: float, symbol: str, context: ProcessWindowFunction.Context[TimeWindow]) -> Tuple[str, Optional[int]]:
         advice_type = None
         advice_timestamp = None
         if previous_ema_38 is not None and previous_ema_100 is not None:
-            # Bullish breakout: EMA38 crosses above EMA100
             if ema_38 > ema_100 and previous_ema_38 <= previous_ema_100:
                 advice_type = "Buy"
                 advice_timestamp = context.current_processing_time()
-                formatted_timestamp = datetime.fromtimestamp(advice_timestamp / 1000).strftime('%Y-%m-%d %H:%M:%S')
-                #if symbol in watch_list:
-                send_email(f"EMA Sell Signal for {symbol}", f"Symbol: {symbol}\nAdvice: Sell\nTimestamp: {formatted_timestamp}")
+                if symbol in watch_list:
+                    send_email(f"EMA Buy Signal for {symbol}", f"Symbol: {symbol}\nAdvice: Buy\nTimestamp: {advice_timestamp}")
                 logging.info(f"Bullish breakout detected for {symbol} - Buy advice generated.")
-            # Bearish breakout: EMA38 crosses below EMA100
             elif ema_100 > ema_38 and previous_ema_100 <= previous_ema_38:
                 advice_type = "Sell"
                 advice_timestamp = context.current_processing_time()
-                formatted_timestamp = datetime.fromtimestamp(advice_timestamp / 1000).strftime('%Y-%m-%d %H:%M:%S')
-                #if symbol in watch_list:
-                send_email(f"EMA Sell Signal for {symbol}", f"Symbol: {symbol}\nAdvice: Sell\nTimestamp: {formatted_timestamp}")
+                if symbol in watch_list:
+                    send_email(f"EMA Sell Signal for {symbol}", f"Symbol: {symbol}\nAdvice: Sell\nTimestamp: {advice_timestamp}")
                 logging.info(f"Bearish breakout detected for {symbol} - Sell advice generated.")
         return advice_type, advice_timestamp
 
@@ -192,8 +207,8 @@ def setup_ema_kafka_producer():
     # Define the serialization schema for the `Row` type specific to EMA
     row_type_info = Types.ROW([
         Types.STRING(),  # Symbol
-        Types.STRING(),    # Window start
-        Types.STRING(),    # Window end
+        Types.LONG(),    # Window start
+        Types.LONG(),    # Window end
         Types.FLOAT(),   # EMA_38 (or defaulted)
         Types.FLOAT(),   # EMA_100 (or defaulted)
         Types.STRING(),  # Breakout type (or "")
@@ -215,14 +230,12 @@ def setup_ema_kafka_producer():
 def main():
     logging.warning("At least main is running successfully")
     env = StreamExecutionEnvironment.get_execution_environment()
-    env.set_stream_time_characteristic(TimeCharacteristic.EventTime)
     #set parallism depending on resources available
     env.set_parallelism(4)
     kafka_consumer = FlinkKafkaConsumer(
         topics="financial_data",
-        properties={"bootstrap.servers": "kafka:9092", "group.id": "flink_consumer","max.poll.interval.ms": "600000","max.poll.records": "10000"},
-        deserialization_schema=SimpleStringSchema() 
-    )
+        properties={"bootstrap.servers": "kafka:9092", "group.id": "flink_consumer","max.poll.interval.ms": "600000","max.poll.records": "100000"},
+        deserialization_schema=SimpleStringSchema())
     kafka_consumer.set_start_from_latest()
     parsed_stream = env.add_source(kafka_consumer).map(
         lambda record: parse_event(json.loads(record)),
@@ -247,8 +260,8 @@ def main():
         .window(TumblingEventTimeWindows.of(Time.minutes(5))) \
         .process(EMAProcessFunction(), Types.TUPLE([
             Types.STRING(),  # Symbol
-            Types.STRING(),    # Window start
-            Types.STRING(),    # Window end
+            Types.LONG(),    # Window start
+            Types.LONG(),    # Window end
             Types.FLOAT(),   # EMA_38 (or defaulted)
             Types.FLOAT(),   # EMA_100 (or defaulted)
             Types.STRING(),  # Breakout type (or "")
@@ -262,8 +275,8 @@ def main():
         lambda x: Row(x[0],x[1],x[2], x[3], x[4], x[5], x[6], x[7]),  # symbol, EMA_38, EMA_100, advice, advice_timestamp, latency
         output_type=Types.ROW([
             Types.STRING(),  # Symbol
-            Types.STRING(),    # Window start
-            Types.STRING(),    # Window end
+            Types.LONG(),    # Window start
+            Types.LONG(),    # Window end
             Types.FLOAT(),   # EMA_38 (or defaulted)
             Types.FLOAT(),   # EMA_100 (or defaulted)
             Types.STRING(),  # Breakout type (or "")

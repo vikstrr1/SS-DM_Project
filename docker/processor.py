@@ -1,5 +1,6 @@
 import json
 import threading
+import os
 from kafka import KafkaConsumer
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
@@ -9,8 +10,8 @@ from datetime import datetime
 influxdb_url = "http://influxdb:8086"
 bucket = "ticker_bucket"  # Ensure this matches your docker-compose setup
 org = "ticker_org"  # Ensure this matches your docker-compose setup
-token = "jqni7nVA2HVLWPLJJ22ULotC7YYPX_E7B7d-icrfZn0sQ1cLSEDNyvi-dQngRjO_u925C-oYSsVpNy1JHPSAjw=="  # Use valid token 
-
+token =os.getenv('INFLUXDB_TOKEN')   # Use valid token 
+#os.getenv('INFLUXDB_TOKEN')
 # Kafka topics
 ticker_topic = "ticker_data"
 ema_topic = "ema_data"
@@ -45,7 +46,6 @@ def consume_ticker():
     )
     for msg in ticker_consumer:
         data = msg.value
-        #print(f"Processing ticker data: {data}")
         try:
             # Convert timestamp to ISO 8601
             iso_timestamp = datetime.strptime(data["f0"], "%d-%m-%Y %H:%M:%S.%f").isoformat() + "Z"
@@ -71,9 +71,9 @@ def consume_ema():
         #print(f"Processing EMA data: {data}")
         try:
             # Convert advice_timestamp to ISO 8601
-            iso_advice_timestamp = datetime.fromtimestamp(data["f4"] / 1000).isoformat() + "Z"
-            iso_context_start = datetime.strptime(data["f1"], "%Y-%m-%d %H:%M:%S").isoformat() + "Z"
-            iso_context_end = datetime.strptime(data["f2"], "%Y-%m-%d %H:%M:%S").isoformat() + "Z"
+            iso_advice_timestamp = datetime.fromtimestamp((data["f2"]+data["f4"]) / 1000).isoformat() + "Z"
+            iso_context_start = datetime.fromtimestamp(data["f1"] / 1000).isoformat() + "Z"
+            iso_context_end = datetime.fromtimestamp(data["f2"] / 1000).isoformat() + "Z"
             influx_data = {
                 "symbol": data["f0"],
                 "context_start": iso_context_start ,
