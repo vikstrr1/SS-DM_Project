@@ -51,3 +51,4 @@ Then choose the dashboard that is already up in grafana and follow the data
 
 sort_file.py will sort the input files by time for testing porpuses.
 
+The .env file contains a watch_list select there which symbols you want to be notified by mail for sell and buy decisions. Because the account can send limited amount of mails.

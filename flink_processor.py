@@ -7,19 +7,17 @@ from pyflink.datastream import ProcessWindowFunction, StreamExecutionEnvironment
 from pyflink.common.watermark_strategy import WatermarkStrategy, TimestampAssigner
 from pyflink.common.time import Time
 from pyflink.datastream.connectors import FlinkKafkaConsumer,FlinkKafkaProducer
-from pyflink.datastream.time_characteristic import TimeCharacteristic
 from pyflink.common.serialization import SimpleStringSchema
 from pyflink.datastream import SinkFunction
 from pyflink.datastream.formats.json import JsonRowSerializationSchema
 import logging
 from datetime import datetime
 from typing import Iterable, Optional, Dict, Tuple
-
 import json
-import requests
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+
 smtp_user = os.getenv('SMTP_USER')
 smtp_pass = os.getenv('SMTP_PASS')
 smtp_recv = os.getenv('SMTP_RECV')
@@ -126,11 +124,11 @@ class EMAProcessFunction(ProcessWindowFunction[ Row,Tuple[str, str, str, Optiona
         self.previous_ema_38_state.update(ema_38)
         self.previous_ema_100_state.update(ema_100)
 
-        if advice_type:
-            last_arrival_time = datetime.strptime(date, "%Y-%m-%dT%H:%M:%S.%f").timestamp()
-            latency = datetime.now().timestamp() - last_arrival_time
+        #if advice_type:
+        #    last_arrival_time = datetime.strptime(date, "%Y-%m-%dT%H:%M:%S.%f").timestamp()
+        #    latency = datetime.now().timestamp() - last_arrival_time
 
-        return [(key, context.window().start, context.window().end, ema_38 or 0.0, ema_100 or 0.0, advice_type or "", advice_timestamp or -1, latency)]
+        return [(key, context.window().start, context.window().end, ema_38 or 0.0, ema_100 or 0.0, advice_type or "", advice_timestamp or -1)]
 
     def calculate_ema(self, current_price: float, previous_ema: Optional[float], alpha: float) -> float:
         if previous_ema is None:
@@ -147,13 +145,13 @@ class EMAProcessFunction(ProcessWindowFunction[ Row,Tuple[str, str, str, Optiona
                 advice_timestamp = context.current_processing_time()
                 if symbol in watch_list:
                     send_email(f"EMA Buy Signal for {symbol}", f"Symbol: {symbol}\nAdvice: Buy\nTimestamp: {datetime.fromtimestamp(advice_timestamp / 1000).isoformat()}")
-                #logging.info(f"Bullish breakout detected for {symbol} - Buy advice generated.")
+                logging.info(f"Bullish breakout detected for {symbol} - Buy advice generated.")
             elif ema_100 > ema_38 and previous_ema_100 <= previous_ema_38:
                 advice_type = "Sell"
                 advice_timestamp = context.current_processing_time()
                 if symbol in watch_list:
                     send_email(f"EMA Sell Signal for {symbol}", f"Symbol: {symbol}\nAdvice: Sell\nTimestamp: {datetime.fromtimestamp(advice_timestamp/ 1000).isoformat()}")
-                #logging.info(f"Bearish breakout detected for {symbol} - Sell advice generated.")
+                logging.info(f"Bearish breakout detected for {symbol} - Sell advice generated.")
         return advice_type, advice_timestamp
 
 class KafkaSink(SinkFunction):
@@ -192,8 +190,7 @@ def setup_ema_kafka_producer():
         Types.FLOAT(),   # EMA_38 (or defaulted)
         Types.FLOAT(),   # EMA_100 (or defaulted)
         Types.STRING(),  # Breakout type (or "")
-        Types.LONG(),     # Breakout timestamp (or -1)
-        Types.LONG()        #Latency
+        Types.LONG()     # Breakout timestamp (or -1)    
     ])
     serialization_schema = JsonRowSerializationSchema.builder() \
         .with_type_info(row_type_info) \
@@ -230,9 +227,9 @@ def main():
     ).filter(lambda x: x is not None)
     
     watermark_strategy = WatermarkStrategy \
-        .for_bounded_out_of_orderness(Duration.of_seconds(10)) \
+        .for_bounded_out_of_orderness(Duration.of_seconds(2)) \
         .with_timestamp_assigner(SimpleTimestampAssigner()) \
-        .with_idleness(Duration.of_seconds(5))
+        .with_idleness(Duration.of_seconds(2))
     #.window(SlidingEventTimeWindows.of(Time.minutes(5), Time.minutes(1)))
     
     windowed_stream = parsed_stream \
@@ -246,14 +243,13 @@ def main():
             Types.FLOAT(),   # EMA_38 (or defaulted)
             Types.FLOAT(),   # EMA_100 (or defaulted)
             Types.STRING(),  # Breakout type (or "")
-            Types.LONG(),     # Breakout timestamp (or -1)
-            Types.LONG()        #Latency
+            Types.LONG()     # Breakout timestamp (or -1)
         ])).filter(lambda x: x[6] != -1)
     
     
     ema_kafka_producer = setup_ema_kafka_producer()
     ema_stream = windowed_stream.map(
-        lambda x: Row(x[0],x[1],x[2], x[3], x[4], x[5], x[6], x[7]),  # symbol, EMA_38, EMA_100, advice, advice_timestamp, latency
+        lambda x: Row(x[0],x[1],x[2], x[3], x[4], x[5], x[6]),  # symbol, EMA_38, EMA_100, advice, advice_timestamp, latency
         output_type=Types.ROW([
             Types.STRING(),  # Symbol
             Types.LONG(),    # Window start
@@ -261,8 +257,7 @@ def main():
             Types.FLOAT(),   # EMA_38 (or defaulted)
             Types.FLOAT(),   # EMA_100 (or defaulted)
             Types.STRING(),  # Breakout type (or "")
-            Types.LONG(),     # Breakout timestamp (or -1)
-            Types.LONG()        #Latency
+            Types.LONG()     # Breakout timestamp (or -1)
         ])
     )
 
@@ -284,7 +279,7 @@ def main():
 
     #logging.warning("Completed ticker streaming")
     # Uncomment to enable EMA value printing 
-    windowed_stream.print().name("print windows stream")
+    #windowed_stream.print().name("print windows stream")
     
 
     #logging.warning("Completed ema streaming")

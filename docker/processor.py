@@ -83,8 +83,7 @@ def consume_ema():
                 "ema_38": data["f3"],
                 "ema_100": data["f4"],
                 "advice": data["f5"],
-                "advice_timestamp": iso_advice_timestamp,
-                "latency": data["f6"]
+                "advice_timestamp": iso_advice_timestamp
             }
             write_to_influxdb(bucket, "ema_data", influx_data)
         except Exception as e:

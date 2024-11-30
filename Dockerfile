@@ -8,7 +8,7 @@ ENV SMTP_USER=${SMTP_RECV}
 ENV SMTP_PASS=${SMTP_PASS}
 ENV SMTP_RECV=${SMTP_RECV}
 
-ENV WATCH_LIST="AN.FR,TRAN.FR,HDF.FR,MLCAS.FR,A3CSAE.ETR,ALBOA.FR,DEE.FR,CTCT1.NL,VAPBS.FR,MLJDL.FR,ALREW.FR"
+ENV WATCH_LIST=${WATCH_LIST}
 
 # Install necessary packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
