@@ -21,6 +21,7 @@ def read_csv(directory_path):
     for filename in os.listdir(directory_path):
         if filename.endswith(".csv"):  # Ensure it's a CSV file
             file_path = os.path.join(directory_path, filename)
+            print(file_path)
             with open(file_path, "r") as f:
                 # Use a buffered reader for efficient reading
                 header_found = False
@@ -62,4 +63,4 @@ def read_csv(directory_path):
 
 if __name__ == "__main__":
     # Adjust the path to your CSV directory
-    read_csv("/opt/flink/jobs/data/trading_data")
+    read_csv("/opt/flink/jobs/data/trading_data/sorted")

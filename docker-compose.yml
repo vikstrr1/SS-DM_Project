@@ -32,6 +32,8 @@ services:
       nofile:
         soft: 100000
         hard: 100000
+    logging:
+      driver: "none"  # Suppress logging
 
 
   flink-jobmanager:
@@ -47,22 +49,21 @@ services:
       SMTP_USER: ${SMTP_USER}
     ports:
       - "8081:8081"
-    command: ["jobmanager", "sh", "-c", "cd .. && ./bin/flink run -py /opt/flink/jobs/flink_processor.py"]
+    command: jobmanager
     networks:
       - kafka_network
     volumes:
       - ./flink-sql-connector-kafka-3.3.0-1.20.jar:/opt/flink/lib/flink-sql-connector-kafka-3.3.0-1.20.jar
-      - ./data/trading_data:/opt/flink/jobs/data/trading_data
-      - ./flink-sql-connector-elasticsearch7-3.0.1-1.17.jar:/opt/flink/lib/flink-connector-elasticsearch.jar
       - /tmp:/tmp
     restart: always
+
 
   flink-taskmanager:
     build: .
     environment:
       JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
-      TASK_MANAGER_NUMBER_OF_TASK_SLOTS: 4  # Set the number of task slots set based on the resources of machine
-      FLINK_PROPERTIES: "taskmanager.numberOfTaskSlots=4"
+      TASK_MANAGER_NUMBER_OF_TASK_SLOTS: 14  # Set the number of task slots set based on the resources of machine
+      FLINK_PROPERTIES: "taskmanager.numberOfTaskSlots=14"
     depends_on:
       - flink-jobmanager
     command: taskmanager
@@ -70,12 +71,11 @@ services:
       - kafka_network
     volumes:
       - ./flink-sql-connector-kafka-3.3.0-1.20.jar:/opt/flink/lib/flink-sql-connector-kafka-3.3.0-1.20.jar
-      - ./data/trading_data:/opt/flink/jobs/data/trading_data
-      - ./flink-sql-connector-elasticsearch7-3.0.1-1.17.jar:/opt/flink/lib/flink-connector-elasticsearch.jar
       - /tmp:/tmp
     deploy:
       replicas: 1
-    restart: always  
+    restart: always 
+
 
   stream-emulator:
     build: .
@@ -87,36 +87,8 @@ services:
       - kafka
     networks:
       - kafka_network
+ 
 
-  #dashboard:
-  #  build: .
-  #  command: ["./wait-for-it.sh", "kafka:9092", "--", "python", "visualization_server.py"]
-  #  ports:
-  #    - "8050:8050"
-  #  depends_on:
-  #    - kafka
-  #  networks:
-  #    - kafka_network
-
-  #elasticsearch:
-  #  image: docker.elastic.co/elasticsearch/elasticsearch:8.1.0
-  #  environment:
-  #    - discovery.type=single-node
-  #    - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
-  #    - ELASTIC_PASSWORD=password123
-  #  ports:
-  #    - "9200:9200"
-  #  networks:
-  #    - elastic_network
-
-  #kibana:
-  #  image: docker.elastic.co/kibana/kibana:8.1.0
-  #  ports:
-  #    - "5601:5601"
-  #  networks:
-  #    - elastic_network
-  #  depends_on:
-  #    - elasticsearch
   influxdb:
     image: influxdb:2.7
     ports:
@@ -133,6 +105,7 @@ services:
       DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN}
     networks:
       - kafka_network
+
       
   grafana:
     image: grafana/grafana-oss:10.0.3
@@ -143,19 +116,12 @@ services:
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin123
-      - GF_DATASOURCE_NAME=influxdb
-      - GF_DATASOURCE_TYPE=influxdb
-      - GF_DATASOURCE_URL=http://influxdb:8086
-      - GF_DATASOURCE_ACCESS=proxy
-      - GF_DATASOURCE_INFLUXDB_VERSION=2
-      - GF_DATASOURCE_INFLUXDB_TOKEN=${INFLUXDB_TOKEN}  # Ensure token is read correctly from .env file
-      - GF_DATASOURCE_INFLUXDB_ORG=${DOCKER_INFLUXDB_INIT_ORG}
-      - GF_DATASOURCE_INFLUXDB_BUCKET=${DOCKER_INFLUXDB_INIT_BUCKET}
     networks:
       - kafka_network
     volumes:
       - grafana-data:/var/lib/grafana
       - ./grafana:/etc/grafana/provisioning/dashboards
+
 
   kafka_to_influx:
     build:
@@ -168,9 +134,11 @@ services:
       - .env
     networks:
       - kafka_network
+
 networks:
   kafka_network:
     driver: bridge
+  
 volumes:
   grafana-data:
   influxdb-data:

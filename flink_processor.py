@@ -146,14 +146,14 @@ class EMAProcessFunction(ProcessWindowFunction[ Row,Tuple[str, str, str, Optiona
                 advice_type = "Buy"
                 advice_timestamp = context.current_processing_time()
                 if symbol in watch_list:
-                    send_email(f"EMA Buy Signal for {symbol}", f"Symbol: {symbol}\nAdvice: Buy\nTimestamp: {datetime.fromtimestamp((context.window().end+advice_timestamp) / 1000).isoformat()}")
-                logging.info(f"Bullish breakout detected for {symbol} - Buy advice generated.")
+                    send_email(f"EMA Buy Signal for {symbol}", f"Symbol: {symbol}\nAdvice: Buy\nTimestamp: {datetime.fromtimestamp(advice_timestamp / 1000).isoformat()}")
+                #logging.info(f"Bullish breakout detected for {symbol} - Buy advice generated.")
             elif ema_100 > ema_38 and previous_ema_100 <= previous_ema_38:
                 advice_type = "Sell"
                 advice_timestamp = context.current_processing_time()
                 if symbol in watch_list:
-                    send_email(f"EMA Sell Signal for {symbol}", f"Symbol: {symbol}\nAdvice: Sell\nTimestamp: {datetime.fromtimestamp((context.window().end+advice_timestamp) / 1000).isoformat()}")
-                logging.info(f"Bearish breakout detected for {symbol} - Sell advice generated.")
+                    send_email(f"EMA Sell Signal for {symbol}", f"Symbol: {symbol}\nAdvice: Sell\nTimestamp: {datetime.fromtimestamp(advice_timestamp/ 1000).isoformat()}")
+                #logging.info(f"Bearish breakout detected for {symbol} - Sell advice generated.")
         return advice_type, advice_timestamp
 
 class KafkaSink(SinkFunction):
@@ -168,9 +168,11 @@ class KafkaSink(SinkFunction):
 def setup_kafka_producer():
     # Define the serialization schema for the `Row` type
     row_type_info = Types.ROW([
-        Types.STRING(),  # timestamp
+        Types.STRING(),  # timestamp_str
         Types.STRING(),  # symbol
-        Types.FLOAT()    # last_priceS
+        Types.STRING(),  # sec_type
+        Types.STRING(),  # arrival_time
+        Types.FLOAT()   # last_price
     ])
     serialization_schema = JsonRowSerializationSchema.builder() \
         .with_type_info(row_type_info) \
@@ -210,7 +212,7 @@ def main():
     env = StreamExecutionEnvironment.get_execution_environment()
     env.set_restart_strategy(RestartStrategies.fixed_delay_restart(3, 10))
     #set parallism depending on resources available
-    env.set_parallelism(4)
+    env.set_parallelism(14)
     kafka_consumer = FlinkKafkaConsumer(
         topics="financial_data",
         properties={"bootstrap.servers": "kafka:9092", "group.id": "flink_consumer","max.poll.interval.ms": "600000","max.poll.records": "100000"},
@@ -269,17 +271,23 @@ def main():
     kafka_producer_ticker = setup_kafka_producer()
     # Send the ticker data to Kafka
     ticker_data_stream = parsed_stream.map(
-            lambda x: Row(x[0], x[1], x[4]),  # Include timestamp_str, symbol, and last_price
-            output_type=Types.ROW([Types.STRING(), Types.STRING(), Types.FLOAT()])  # Define output schema
+            lambda x: Row(x[0], x[1],x[2],x[3], x[4]),  # Include timestamp_str, symbol, and last_price
+            output_type=Types.ROW([
+                Types.STRING(),  # timestamp_str
+                Types.STRING(),  # symbol
+                Types.STRING(),  # sec_type
+                Types.STRING(),  # arrival_time
+                Types.FLOAT()   # last_price
+                ])  # Define output schema
         )
     ticker_data_stream.add_sink(kafka_producer_ticker)
 
-    logging.warning("Completed ticker streaming")
+    #logging.warning("Completed ticker streaming")
     # Uncomment to enable EMA value printing 
     windowed_stream.print().name("print windows stream")
     
 
-    logging.warning("Completed ema streaming")
+    #logging.warning("Completed ema streaming")
     
     # Execute the Flink job
     env.execute("Flink EMA Calculation and Breakout Detection")

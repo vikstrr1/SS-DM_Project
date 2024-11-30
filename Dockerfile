@@ -26,7 +26,6 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 # Copy necessary Python scripts
 COPY stream_emulator.py /opt/flink/jobs/
 COPY flink_processor.py /opt/flink/jobs/
-COPY visualization_server.py .
 
 #Install Elasticsearch Python Client for saving the data.
 #RUN pip3 install elasticsearch

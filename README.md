@@ -13,28 +13,41 @@ Explanation of
 Flink, Grafanan influxdb
 
 ## With grafana and influxdb
-Go to http://localhost:8086/ and login and obtain token for python processor.py script it should be avaible under python config
-After that has been obtainend and put into python file
+Go to http://localhost:8086/ and login and obtain token 
+after the first start up the same token be used by setting it in the env file used for the processor.py script as well for grafana to obtain data from infulx
+
 Run following command
 ``docker-compose up --build kafka_to_influx``
+Just to make sure the script start succesfully as it is built from a different dockerfile than rest of containers
+
 Data will no be put into influxdb bucket and saved for one hour
 login to both influx and grafana with user admin and password admin123 
-grafana dashboard avaible at http://localhost:3000/
+grafana dashboard avaible at http://localhost:3000/ 
 
 ## Grafana
 
 Go to Grafan and add datasource.
-First need to obtain a api key from influxdB named GRafana for example
+First need to obtain a api key from influxdB named Grafana for example
 After that add
 host http://influxdb:8086/
+and the rest like organistaion: ticker_org
+and bucket: ticker_bucket
+
+then the data source should be configured make sure the dahsboard uses that datasource!
+
+The data source need to be added manually use thee same token as the kafka to influx script uses.
+
+After that the dahsboard needs to be uploaded manually, after the dahsboard has been set in .env file!
+
+After that will need to update every view manully by selecting the datasource and executing the query!!
+
 
 and the token then click save and test.
 
 Then choose the dashboard that is already up in grafana and follow the data
 
 
-#### Questions on Q&A
-- Is the current visualization tool for stocks sufficient? Or should you as an user be able to change which stocks are monitored after starting the 
-- Currently the specified tickers are sent to elasticsearch to be visualized in kibana. 
-- Is it sufficient to just insert from csv file. What kind of improvements could we make here. Currently we are kind of frontrunning the "clock" because we have an historic dataset. 
-- 
+## Sort files 
+
+sort_file.py will sort the input files by time for testing porpuses.
+

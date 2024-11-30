@@ -52,7 +52,9 @@ def consume_ticker():
             influx_data = {
                 "timestamp": iso_timestamp,
                 "symbol": data["f1"],
-                "price": data["f2"]
+                "sec_type": data["f2"],
+                "arrival_time": data["f3"],
+                "price": data["f4"]
             }
             write_to_influxdb(bucket, "ticker_data", influx_data)
         except Exception as e:
