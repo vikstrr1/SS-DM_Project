@@ -209,7 +209,7 @@ def main():
     env = StreamExecutionEnvironment.get_execution_environment()
     env.set_restart_strategy(RestartStrategies.fixed_delay_restart(3, 10))
     #set parallism depending on resources available
-    env.set_parallelism(14)
+    env.set_parallelism(8)
     kafka_consumer = FlinkKafkaConsumer(
         topics="financial_data",
         properties={"bootstrap.servers": "kafka:9092", "group.id": "flink_consumer","max.poll.interval.ms": "600000","max.poll.records": "100000"},

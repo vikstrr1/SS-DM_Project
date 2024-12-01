@@ -62,8 +62,8 @@ services:
     build: .
     environment:
       JOB_MANAGER_RPC_ADDRESS: flink-jobmanager
-      TASK_MANAGER_NUMBER_OF_TASK_SLOTS: 14  # Set the number of task slots set based on the resources of machine
-      FLINK_PROPERTIES: "taskmanager.numberOfTaskSlots=14"
+      TASK_MANAGER_NUMBER_OF_TASK_SLOTS: 8  # Set the number of task slots set based on the resources of machine
+      FLINK_PROPERTIES: "taskmanager.numberOfTaskSlots=8"
     depends_on:
       - flink-jobmanager
     command: taskmanager
