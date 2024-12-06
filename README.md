@@ -13,20 +13,27 @@ Explanation of
 Flink, Grafanan influxdb
 
 ## With grafana and influxdb
-Go to http://localhost:8086/ and login and obtain token 
-after the first start up the same token be used by setting it in the env file used for the processor.py script as well for grafana to obtain data from infulx
 
-Run following command
+In order to use influxdb we must configure it so that it can easily communicate with grafana. This can be done by going to 
+http://localhost:8086/ and logging in using (username admin password admin 123). Navigate under the upload tab to "API tokens" and generate a new token. Name the new token Grafana and set the token in the .env file under INFLUX_DB_TOKEN.
+This needs to be done before running the flink script and visualizing in grafana. 
+
+After that, Run following command
 ``docker-compose up --build kafka_to_influx``
 Just to make sure the script start succesfully as it is built from a different dockerfile than rest of containers
 
-Data will no be put into influxdb bucket and saved for one hour
+Data will now be put into influxdb bucket and saved for one hour
 login to both influx and grafana with user admin and password admin123 
 grafana dashboard avaible at http://localhost:3000/ 
 
 ## Grafana
 
 Go to Grafan and add datasource.
+
+The grafana config should be in the same way as the following picture.
+![Alt text](grafanaconfigscreenshot.png)
+
+
 First need to obtain a api key from influxdB named Grafana for example
 After that add
 host http://influxdb:8086/
@@ -35,7 +42,7 @@ and bucket: ticker_bucket
 
 then the data source should be configured make sure the dahsboard uses that datasource!
 
-The data source need to be added manually use thee same token as the kafka to influx script uses.
+The data source need to be added manually use the same token as the kafka to influx script uses.
 
 After that the dahsboard needs to be uploaded manually, after the dahsboard has been set in .env file!
 
@@ -49,6 +56,6 @@ Then choose the dashboard that is already up in grafana and follow the data
 
 ## Sort files 
 
-sort_file.py will sort the input files by time for testing porpuses.
+sort_file.py will sort the input files by time for testing purposes.
 
 The .env file contains a watch_list select there which symbols you want to be notified by mail for sell and buy decisions. Because the account can send limited amount of mails.
